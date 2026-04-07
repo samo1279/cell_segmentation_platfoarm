@@ -1,15 +1,35 @@
-image:
-  repository: localhost:32000/gradio-segmentation-app
-  tag: latest
-  pullPolicy: Always
+# --- App Container (Gradio) ---
+app:
+  image:
+    repository: localhost:32000/cellpose-poc-app
+    tag: latest
+    pullPolicy: Always
+  port: 8001
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
 
+# --- Model Container (FastAPI + Cellpose) ---
+model:
+  image:
+    repository: localhost:32000/cellpose-poc-model
+    tag: latest
+    pullPolicy: Always
+  port: 8000
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+      nvidia.com/gpu: 1
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+      nvidia.com/gpu: 1
+
+# --- Ingress ---
 ingress:
-  host: gradio-segmentation-app.g007.imec.local
-
-resources:
-  requests:
-    cpu: 500m
-    memory: 512Mi
-  limits:
-    cpu: 2000m
-    memory: 4Gi
+  host: cellpose-poc.g007.imec.local

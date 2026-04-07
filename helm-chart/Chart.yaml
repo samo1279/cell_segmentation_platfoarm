@@ -1,6 +1,6 @@
 apiVersion: v2
-name: gradio-app
-description: A Helm chart for a Gradio app on G007 AI Cluster
+name: cellpose-poc
+description: Helm chart for the Cell Segmentation POC — Gradio App + Cellpose Model containers
 type: application
 version: 0.1.0
 appVersion: "1.0.0"

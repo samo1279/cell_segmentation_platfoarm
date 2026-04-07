@@ -1,10 +1,24 @@
+# --- App Service (exposed via Ingress) ---
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Release.Name }}-app
 spec:
   ports:
-    - port: 7860
-      targetPort: 7860
+    - port: {{ .Values.app.port }}
+      targetPort: {{ .Values.app.port }}
   selector:
     app: {{ .Release.Name }}-app
+---
+# --- Model Service (ClusterIP — internal only, never exposed to the host) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-model
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.model.port }}
+      targetPort: {{ .Values.model.port }}
+  selector:
+    app: {{ .Release.Name }}-model

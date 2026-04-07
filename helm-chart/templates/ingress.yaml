@@ -20,4 +20,4 @@ spec:
               service:
                 name: {{ .Release.Name }}-app
                 port:
-                  number: 7860
+                  number: {{ .Values.app.port }}

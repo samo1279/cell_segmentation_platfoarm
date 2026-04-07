@@ -3,7 +3,7 @@ stages:
   - deploy
 
 variables:
-  APP_NAME: "gradio-segmentation-app"
+  APP_NAME: "cellpose-poc"
   # PUSH_REGISTRY: address Kaniko uses to push — must be the node IP/hostname,
   # NOT localhost (localhost inside a CI pod refers to the pod, not the node).
   PUSH_REGISTRY: "10.136.94.110:32000"
@@ -13,7 +13,8 @@ variables:
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
   APP_DOMAIN: "${APP_NAME}.g007.imec.local"
 
-build:
+# Build the Gradio App Container image
+build-app:
   stage: build
   image:
     name: gcr.io/kaniko-project/executor:v1.14.0-debug
@@ -22,20 +23,39 @@ build:
     - a40gpu
   script:
     - /kaniko/executor
-      --context "${CI_PROJECT_DIR}"
-      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
-      --destination "${PUSH_REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+      --context "${CI_PROJECT_DIR}/App_container"
+      --dockerfile "${CI_PROJECT_DIR}/App_container/Dockerfile"
+      --destination "${PUSH_REGISTRY}/${APP_NAME}-app:${IMAGE_TAG}"
       --insecure
 
+# Build the FastAPI / Cellpose Model Container image
+build-model:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.14.0-debug
+    entrypoint: [""]
+  tags:
+    - a40gpu
+  script:
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}/Model_container"
+      --dockerfile "${CI_PROJECT_DIR}/Model_container/Dockerfile"
+      --destination "${PUSH_REGISTRY}/${APP_NAME}-model:${IMAGE_TAG}"
+      --insecure
+
+# Deploy both containers via Helm (only on main branch)
 deploy:
   stage: deploy
   image: alpine/helm:3.14.0
   tags:
     - a40gpu
+  needs: [build-app, build-model]
   script:
     - helm upgrade --install ${APP_NAME} ./helm-chart
-      --set image.repository=${PULL_REGISTRY}/${APP_NAME}
-      --set image.tag=${IMAGE_TAG}
+      --set app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
+      --set app.image.tag=${IMAGE_TAG}
+      --set model.image.repository=${PULL_REGISTRY}/${APP_NAME}-model
+      --set model.image.tag=${IMAGE_TAG}
       --set ingress.host=${APP_DOMAIN}
       --namespace ${APP_NAME}
       --create-namespace
