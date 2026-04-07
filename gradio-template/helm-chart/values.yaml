@@ -1,0 +1,15 @@
+image:
+  repository: localhost:32000/gradio-segmentation-app
+  tag: latest
+  pullPolicy: Always
+
+ingress:
+  host: gradio-segmentation-app.g007.imec.local
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 4Gi
