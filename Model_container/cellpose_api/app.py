@@ -1,4 +1,5 @@
 import io
+import os
 import numpy as np
 import imageio.v3 as iio
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -9,16 +10,52 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
+
 app = FastAPI(title="Cellpose Segmentation API")
 
-logger.info("Loading Cellpose model...")
-MODEL = models.CellposeModel(gpu=False, pretrained_model="cyto3") 
+logger.info(f"Loading Cellpose model (gpu={USE_GPU})...")
+MODEL = models.CellposeModel(gpu=USE_GPU, pretrained_model="cyto3")
 logger.info(f"Model Architecture:\n{MODEL.net}")
 logger.info("Model loaded successfully")
 
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+MAX_DIMENSION = 8192
+ALLOWED_CONTENT_TYPES = {"image/png", "image/tiff", "image/tif", "image/jpeg", "image/jpg"}
+ALLOWED_EXTENSIONS = {".png", ".tiff", ".tif", ".jpeg", ".jpg"}
+
+
 @app.get("/health")
 def health():
-    return {"ok": True, "model": "cyto3", "gpu": False}
+    return {"ok": True, "model": "cyto3", "gpu": USE_GPU}
+
+
+@app.get("/parameters")
+def parameters():
+    return {
+        "diameter": {
+            "type": "float",
+            "default": None,
+            "min": 0.0,
+            "max": 500.0,
+            "description": "Expected cell diameter in pixels. Use None (0) for auto-detection.",
+        },
+        "flow_threshold": {
+            "type": "float",
+            "default": 0.4,
+            "min": 0.0,
+            "max": 1.0,
+            "description": "Maximum allowed error of the flow fields. Higher values allow more cells.",
+        },
+        "cellprob_threshold": {
+            "type": "float",
+            "default": 0.0,
+            "min": -6.0,
+            "max": 6.0,
+            "description": "Threshold on cell probability output. Lower values include more pixels as cells.",
+        },
+    }
+
 
 @app.post("/segment")
 async def segment(
@@ -27,13 +64,40 @@ async def segment(
     flow_threshold: float = Form(default=0.4),
     cellprob_threshold: float = Form(default=0.0),
 ):
-    try:
-        logger.info(f"Processing image: {image.filename}")
-        
-        data = await image.read()
-        img = iio.imread(data)
-        logger.info(f"Image shape: {img.shape}")
+    # --- Input validation ---
+    ext = os.path.splitext(image.filename or "")[1].lower()
+    content_type = (image.content_type or "").lower()
+    if ext not in ALLOWED_EXTENSIONS and content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported file format '{ext}'. Allowed: PNG, TIFF, JPEG.",
+        )
 
+    data = await image.read()
+
+    if len(data) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"File too large ({len(data) // (1024*1024)} MB). Maximum allowed is 50 MB.",
+        )
+
+    try:
+        img = iio.imread(io.BytesIO(data))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not decode image: {str(e)}")
+
+    if img.ndim >= 2:
+        h, w = img.shape[:2]
+        if h > MAX_DIMENSION or w > MAX_DIMENSION:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Image resolution {w}x{h} exceeds maximum {MAX_DIMENSION}x{MAX_DIMENSION}.",
+            )
+
+    logger.info(f"Processing image: {image.filename}, shape={img.shape}")
+
+    # --- Segmentation ---
+    try:
         result = MODEL.eval(
             img,
             diameter=diameter,
@@ -41,20 +105,20 @@ async def segment(
             cellprob_threshold=cellprob_threshold,
             channels=[0, 0],
         )
-        
-        masks = result[0]
-        logger.info(f"Segmentation complete. Found {len(np.unique(masks))-1} cells")
-
-        buf = io.BytesIO()
-        np.save(buf, masks.astype(np.int32))
-        buf.seek(0)
-        
-        return Response(
-            content=buf.getvalue(), 
-            media_type="application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename=masks.npy"}
-        )
     except Exception as e:
-        logger.error(f"Error processing image: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Segmentation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(e)}")
+
+    masks = result[0]
+    logger.info(f"Segmentation complete. Found {len(np.unique(masks)) - 1} cells")
+
+    buf = io.BytesIO()
+    np.save(buf, masks.astype(np.int32))
+    buf.seek(0)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": "attachment; filename=masks.npy"},
+    )
    

@@ -1,0 +1,41 @@
+# Changelog
+
+All notable changes to the Cell Segmentation Platform (POC v1) will be documented in this file.
+
+Format follows [Keep a Changelog](https://keepachangelog.com/).
+
+## [Unreleased] — Phase 1 Complete (POC v1 Foundation)
+
+### Added
+- `README.md` — project overview, quick start, usage guide, API reference, configuration, project structure, development guide, roadmap (`docs`)
+- `App_container/app.py` — full Gradio Blocks UI: image upload, diameter/flow/cellprob sliders, `segment()` callback via `httpx`, colored overlay rendering (tab20 colormap, alpha 0.55), cell count summary, per-cell stats table (Cell ID, area px, area %), size distribution histogram, overlay PNG + `masks.npy` download buttons (`gradio-dev`)
+- `App_container/requirements.txt` — `gradio`, `httpx`, `numpy`, `Pillow`, `matplotlib` (`gradio-dev`)
+- `App_container/Dockerfile` — `python:3.11-slim`, port 8001 (`gradio-dev`)
+- `GET /parameters` endpoint in `Model_container/cellpose_api/app.py` — returns JSON schema with type, default, min, max, description for all Cellpose parameters (`model-dev`)
+- Input validation in `POST /segment`: 50 MB file size cap, PNG/TIFF/JPEG format whitelist, 8192×8192 max resolution, structured 422 responses (`model-dev`)
+- `USE_GPU` environment variable in Model Container — replaces hardcoded `gpu=False` (`model-dev`)
+- `curl` and `build-essential` in `Model_container/Dockerfile` for healthcheck support (`devops`)
+- `HEALTHCHECK` directive in `Model_container/Dockerfile` — polls `GET /health` every 30s (`devops`)
+- `improved_system_design.md` — full architecture spec with Mermaid diagrams, API contract, source code, docker-compose reference
+- `.github/instructions/system-design.instructions.md` — workspace instruction enforcing 2-container architecture, API contract immutability, mandatory changelog entries
+- `.github/agents/gradio-dev.agent.md` — Gradio UI developer agent with Gradio conventions and cross-agent handoffs
+- `.github/agents/model-dev.agent.md` — Model Container developer agent with FastAPI/Cellpose conventions and cross-agent handoffs
+- `.github/agents/devops.agent.md` — DevOps agent for Docker, networking, integration testing, and cross-agent handoffs
+- `.github/agents/docs.agent.md` — Technical documentation agent for README, CHANGELOG, and design doc
+- `.github/plan.md` — phased implementation plan (4 phases, 42 numbered steps)
+- `CHANGELOG.md` — this file
+
+### Changed
+- `docker-compose.yml` — rewritten: renamed service `cellpose-api` → `model`, fixed build context from `.` to `./Model_container`, changed model from `ports: 8002:8000` to `expose: ["8000"]` (internal only), added `healthcheck`, added `depends_on: model: condition: service_healthy`, added `app` service on port 8001 (`devops`)
+- `Model_container/cellpose_api/app.py` — `gpu` flag now reads `USE_GPU` env var; `/health` reports actual GPU state; errors split into 422 validation and 500 segmentation with structured `{"detail": "..."}` body (`model-dev`)
+- `Model_container/Dockerfile` — added `curl`, `build-essential`, `HEALTHCHECK` directive (`devops`)
+- `App_container/app.py` — uses `matplotlib.colormaps["tab20"]` (replaces deprecated `plt.cm.get_cmap`); handles grayscale (2-D) and RGBA (4-channel) inputs before overlay rendering (`gradio-dev`)
+
+### Verified (Phase 1D — Integration Tests, 2026-04-07)
+- `POST /segment` synthetic 256×256 random image → HTTP 200, masks shape (256, 256)
+- `POST /segment` realistic 512×512 cell-like grayscale → HTTP 200, 6 cells detected
+- `POST /segment` missing `image` field → 422 Unprocessable Entity
+- `POST /segment` non-image file (text/plain) → 422 Unprocessable Entity
+- `GET /health` → 200, `{"ok": true, "model": "cyto3", "gpu": false}`
+- `GET /parameters` → 200, full schema with type/default/min/max/description for all 3 parameters
+- Gradio UI at `http://localhost:8001` → HTTP 200
