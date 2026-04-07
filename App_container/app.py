@@ -1,4 +1,5 @@
 import io
+import os
 import tempfile
 import numpy as np
 import httpx
@@ -8,7 +9,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from PIL import Image
 
-MODEL_URL = "http://model:8000/segment"
+MODEL_URL = os.getenv("MODEL_URL", "http://model:8000/segment")
 
 
 def segment(image, diameter, flow_threshold, cellprob_threshold):

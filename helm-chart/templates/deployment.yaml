@@ -1,0 +1,84 @@
+# --- App Container Deployment (Gradio UI) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-app
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-app
+    spec:
+      nodeSelector:
+        role: management
+      containers:
+        - name: gradio
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          ports:
+            - containerPort: 8001
+              name: http
+          env:
+            # Point the app at the in-cluster model service
+            - name: MODEL_URL
+              value: "http://{{ .Release.Name }}-model:8000/segment"
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+# --- Model Container Deployment (FastAPI + Cellpose) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-model
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-model
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-model
+    spec:
+      nodeSelector:
+        role: management
+      containers:
+        - name: cellpose
+          image: "{{ .Values.model.image.repository }}:{{ .Values.model.image.tag }}"
+          imagePullPolicy: {{ .Values.model.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            {{- toYaml .Values.model.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
