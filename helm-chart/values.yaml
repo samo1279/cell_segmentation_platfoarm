@@ -20,15 +20,15 @@ model:
     tag: latest
     pullPolicy: Always
   port: 8000
+  # Set to true only if the cluster has the NVIDIA device plugin enabled (microk8s enable gpu)
+  useGpu: false
   resources:
     requests:
       cpu: 500m
-      memory: 2Gi
-      nvidia.com/gpu: 1
+      memory: 4Gi
     limits:
       cpu: 4000m
       memory: 8Gi
-      nvidia.com/gpu: 1
 
 # --- Ingress ---
 ingress:

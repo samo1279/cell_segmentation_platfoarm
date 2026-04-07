@@ -68,17 +68,22 @@ spec:
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: USE_GPU
+              value: {{ .Values.model.useGpu | quote }}
           resources:
             {{- toYaml .Values.model.resources | nindent 12 }}
+          # Model weights (~1 GB) are downloaded on first start — allow 3 minutes before probing
           livenessProbe:
             httpGet:
               path: /health
               port: {{ .Values.model.port }}
-            initialDelaySeconds: 60
+            initialDelaySeconds: 180
             periodSeconds: 30
+            failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /health
               port: {{ .Values.model.port }}
-            initialDelaySeconds: 30
+            initialDelaySeconds: 120
             periodSeconds: 15
+            failureThreshold: 10
