@@ -5,8 +5,8 @@ metadata:
   name: {{ .Release.Name }}-app
 spec:
   ports:
-    - port: 8001
-      targetPort: 8001
+    - port: {{ .Values.app.port }}
+      targetPort: {{ .Values.app.port }}
   selector:
     app: {{ .Release.Name }}-app
 ---
@@ -18,7 +18,7 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - port: 8000
-      targetPort: 8000
+    - port: {{ .Values.model.port }}
+      targetPort: {{ .Values.model.port }}
   selector:
     app: {{ .Release.Name }}-model

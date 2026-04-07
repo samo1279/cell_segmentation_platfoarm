@@ -4,6 +4,7 @@ app:
     repository: localhost:32000/cellpose-poc-app
     tag: latest
     pullPolicy: Always
+  port: 8001
   resources:
     requests:
       cpu: 250m
@@ -18,6 +19,7 @@ model:
     repository: localhost:32000/cellpose-poc-model
     tag: latest
     pullPolicy: Always
+  port: 8000
   resources:
     requests:
       cpu: 500m

@@ -49,6 +49,7 @@ deploy:
   image: alpine/helm:3.14.0
   tags:
     - a40gpu
+  needs: [build-app, build-model]
   script:
     - helm upgrade --install ${APP_NAME} ./helm-chart
       --set app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
