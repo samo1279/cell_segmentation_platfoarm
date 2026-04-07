@@ -1,8 +1,10 @@
-# Improved System Architecture — Cell Segmentation Platform
+# System Architecture — Cell Segmentation Platform (POC v1)
 
 ## Overview
 
-A browser-based cell segmentation and annotation platform built on two Docker containers orchestrated behind a reverse proxy. Users upload microscopy images, run Cellpose segmentation, view colored mask overlays, and refine annotations with editing tools — all persisted to disk.
+A minimal browser-based cell segmentation tool built on **two Docker containers**. Users upload microscopy images, tune Cellpose parameters, and get back a colored segmentation overlay with cell count and per-cell statistics. No annotation editing, no database, no task queue — just upload, segment, view results.
+
+**Stack:** Gradio (App Container) + FastAPI/Cellpose (Model Container)
 
 ---
 
@@ -11,47 +13,40 @@ A browser-based cell segmentation and annotation platform built on two Docker co
 ```mermaid
 graph TB
     subgraph User["User - Browser"]
-        Upload["Upload Image +
-        Set Parameters"]
-        Viewer["Overlay Viewer
-        Original + Colored Mask"]
-        Editor["Annotation Editor
-        Brush / Erase / Merge / Split
-        Undo / Redo"]
+        Upload["Upload Image"]
+        Params["Tune Parameters
+        diameter / flow threshold
+        cell probability threshold"]
+        Results["View Results
+        Colored overlay + cell count
+        Per-cell area statistics"]
+        Download["Download
+        Overlay PNG + masks.npy"]
     end
 
-    Upload -->|HTTPS| Nginx
-    Viewer -->|HTTPS| Nginx
-    Editor -->|HTTPS| Nginx
+    Upload -->|HTTP| GradioApp
+    Params -->|HTTP| GradioApp
+    Results -->|HTTP| GradioApp
+    Download -->|HTTP| GradioApp
 
     subgraph DockerNetwork["Docker Compose - Internal Network"]
 
-        Nginx["Nginx - Reverse Proxy
-        TLS termination
-        Upload limit 50 MB
-        Static file serving
-        Route: / to App
-        Rate limiting"]
-
-        subgraph AppContainer["App Container - Django 5 + DRF"]
+        subgraph AppContainer["App Container - Gradio"]
             direction TB
-            AppAPI["REST API
-            POST /api/images/upload
-            POST /api/images/id/segment
-            GET /api/jobs/id/status
-            GET /api/images/id/overlay
-            POST /api/annotations/id/save"]
-            OverlayEngine["Overlay Renderer
-            numpy npy to colored PNG
-            Label colors + Alpha composite"]
-            ORM["Django ORM
-            Project + Image
-            SegmentationResult
-            Annotation - versioned"]
-            CeleryWorker["Celery Worker
-            Async segmentation jobs
-            Progress tracking
-            Retry on failure"]
+            GradioApp["Gradio Interface
+            File upload widget
+            Parameter sliders
+            Image display
+            Stats table
+            Download buttons"]
+            Overlay["Overlay Renderer
+            masks.npy to colored PNG
+            alpha composite on original"]
+            Stats["Statistics Engine
+            cell count
+            per-cell area in pixels
+            mean / median / std area
+            size distribution histogram"]
         end
 
         subgraph ModelContainer["Model Container - FastAPI + Cellpose"]
@@ -59,64 +54,27 @@ graph TB
             ModelAPI["API Endpoints
             GET /health
             POST /segment"]
-            Validation["Input Validation
-            File size max 50 MB
-            Format: PNG / TIFF / JPEG
-            Max dims: 8192 x 8192"]
             Cellpose["CellposeModel cyto3
             model.eval with diameter,
             flow_threshold,
             cellprob_threshold
             GPU: env USE_GPU"]
-            ModelAuth["API Key Auth
-            X-API-Key header
-            Internal use only"]
         end
-
-        Redis["Redis
-        Celery broker
-        Job status store"]
-
-        DB["PostgreSQL
-        Projects + Images
-        Segmentation results
-        Annotation versions"]
     end
 
-    subgraph Storage["Docker Volumes"]
-        MediaVol["media_volume
-        Uploaded images
-        Mask npy files
-        Overlay PNGs
-        Edited annotations"]
-        DBVol["db_volume
-        PostgreSQL data"]
-    end
-
-    Nginx -->|proxy_pass :8001| AppAPI
-    AppAPI --> ORM
-    ORM --> DB
-    AppAPI -->|enqueue job| CeleryWorker
-    CeleryWorker -->|broker| Redis
-    CeleryWorker -->|internal HTTP
-    POST /segment| ModelAPI
-    ModelAPI --> Validation
-    Validation --> Cellpose
-    Cellpose -->|masks.npy| CeleryWorker
-    CeleryWorker -->|store result| MediaVol
-    CeleryWorker --> OverlayEngine
-    OverlayEngine -->|colored PNG| MediaVol
-    AppAPI -->|read/write| MediaVol
-    DB -->|persist| DBVol
+    GradioApp -->|POST /segment
+    image + params| ModelAPI
+    ModelAPI --> Cellpose
+    Cellpose -->|masks.npy| GradioApp
+    GradioApp --> Overlay
+    GradioApp --> Stats
 
     style User fill:#FFF8E1,stroke:#F9A825,stroke-width:2px
     style DockerNetwork fill:#E3F2FD,stroke:#1565C0,stroke-width:2px
     style AppContainer fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px
     style ModelContainer fill:#FFEBEE,stroke:#C62828,stroke-width:2px
-    style Storage fill:#F3E5F5,stroke:#6A1B9A,stroke-width:2px
-    style Nginx fill:#BBDEFB,stroke:#1565C0
-    style Redis fill:#FFCDD2,stroke:#C62828
-    style DB fill:#C8E6C9,stroke:#2E7D32
+    style GradioApp fill:#C8E6C9,stroke:#2E7D32
+    style ModelAPI fill:#FFCDD2,stroke:#C62828
 ```
 
 ---
@@ -126,276 +84,268 @@ graph TB
 ```mermaid
 sequenceDiagram
     actor User
-    participant Nginx
-    participant App as App Container Django
-    participant Redis
-    participant Worker as Celery Worker
+    participant Gradio as Gradio App
     participant Model as Model Container Cellpose
-    participant Disk as media_volume
 
-    User->>Nginx: POST /api/images/upload
-    Nginx->>App: proxy request
-    App->>Disk: save original image
-    App->>App: create Image record in DB
-    App-->>User: 201 image_id
+    User->>Gradio: Upload image + set sliders
+    User->>Gradio: Click Submit
 
-    User->>Nginx: POST /api/images/id/segment
-    Nginx->>App: proxy request
-    App->>Redis: enqueue segmentation task
-    App-->>User: 202 job_id, status pending
-
-    Worker->>Redis: pick up task
-    Worker->>Disk: read original image
-    Worker->>Model: POST /segment with image + params + API key
-    Model->>Model: validate input size, format, dims
+    Gradio->>Gradio: Read image as numpy array
+    Gradio->>Gradio: Encode image as PNG bytes
+    Gradio->>Model: POST /segment image + params
     Model->>Model: CellposeModel.eval
-    Model-->>Worker: masks.npy binary
+    Model-->>Gradio: masks.npy binary response
 
-    Worker->>Disk: save masks.npy
-    Worker->>Worker: render overlay numpy to colored PNG
-    Worker->>Disk: save overlay.png
-    Worker->>Redis: update status to completed
+    Gradio->>Gradio: Load masks from .npy bytes
+    Gradio->>Gradio: Count unique labels = cell count
+    Gradio->>Gradio: Compute per-cell area statistics
+    Gradio->>Gradio: Render colored overlay on original
+    Gradio->>Gradio: Generate size distribution histogram
 
-    User->>Nginx: GET /api/jobs/id/status polling
-    Nginx->>App: proxy
-    App->>Redis: check status
-    App-->>User: status completed + overlay_url
-
-    User->>Nginx: GET /api/images/id/overlay
-    Nginx->>App: proxy
-    App->>Disk: read overlay PNG
-    App-->>User: image/png colored mask on original
-```
-
----
-
-## Data Flow — Annotation Editing
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant Canvas as Browser Canvas
-    participant App as App Container
-    participant Disk as media_volume
-
-    User->>Canvas: load overlay + label map
-    App->>Canvas: GET /api/images/id/labels JSON label map
-
-    loop Editing Session
-        User->>Canvas: brush / erase / merge / split
-        Canvas->>Canvas: update local label map, push to undo stack
-    end
-
-    User->>Canvas: click Save
-    Canvas->>App: POST /api/annotations/id/save modified label map
-    App->>Disk: save annotation version N+1
-    App->>App: create Annotation record version N+1
-    App-->>Canvas: 200 OK new version saved
-
-    User->>App: GET /api/annotations/id/history
-    App-->>User: version list with timestamps
+    Gradio-->>User: Overlay image + stats table + histogram
+    User->>Gradio: Click Download overlay or masks
+    Gradio-->>User: overlay.png or masks.npy file
 ```
 
 ---
 
 ## Component Details
 
-### Nginx — Reverse Proxy
+### App Container — Gradio
 
-| Concern | Configuration |
-|---------|--------------|
-| Entry point | Port 443 (HTTPS) or 80 (HTTP dev) |
-| Upload limit | `client_max_body_size 50m` |
-| Routing | `/` → App Container `:8001` |
-| Static files | `/static/` served directly from volume |
-| Media files | `/media/` served directly from volume |
-| Rate limiting | 10 req/s per IP on `/api/` |
-| Model Container | **Not exposed** — internal network only |
-
-### App Container — Django 5
+**Single Python file (~100 lines).** No framework, no ORM, no templates.
 
 **Responsibilities:**
-- User-facing web UI (templates + HTMX)
-- REST API for image/annotation CRUD
-- Async job orchestration via Celery
-- Server-side mask → overlay rendering
-- Annotation version management
+- File upload UI with drag-and-drop
+- Parameter sliders (diameter, flow threshold, cell probability threshold)
+- Internal HTTP call to Model Container
+- Mask deserialization (.npy bytes to numpy array)
+- Overlay rendering (colored labels alpha-composited on original image)
+- Statistics computation (cell count, area per cell, distribution)
+- Result display (overlay image, stats table, histogram)
+- Download buttons (overlay PNG, raw masks .npy)
 
-**Data Models:**
+**UI Elements (all provided by Gradio built-in components):**
+
+| Component | Gradio Widget | Purpose |
+|-----------|--------------|---------|
+| Image upload | `gr.Image(type="numpy")` | Accepts PNG, TIFF, JPEG via drag-and-drop |
+| Diameter | `gr.Slider(0, 200, value=30)` | Cellpose diameter parameter |
+| Flow threshold | `gr.Slider(0, 1, value=0.4)` | Cellpose flow threshold |
+| Cell prob threshold | `gr.Slider(-6, 6, value=0.0)` | Cellpose cell probability threshold |
+| Overlay output | `gr.Image(label="Segmentation")` | Colored mask overlay on original |
+| Cell count | `gr.Textbox()` | Summary: "142 cells detected" |
+| Stats table | `gr.Dataframe()` | Per-cell ID, area (px), area (pct) |
+| Histogram | `gr.Plot()` | Cell size distribution (matplotlib) |
+| Download overlay | `gr.File()` | Download overlay as PNG |
+| Download masks | `gr.File()` | Download raw masks as .npy |
+
+**Dependencies (requirements.txt):**
 
 ```
-Project
-├── id: UUID
-├── name: str
-├── created_at: datetime
-│
-├── Image (FK → Project)
-│   ├── id: UUID
-│   ├── file: FileField (→ media_volume)
-│   ├── width, height: int
-│   ├── uploaded_at: datetime
-│   │
-│   ├── SegmentationResult (FK → Image)
-│   │   ├── id: UUID
-│   │   ├── mask_file: FileField (.npy)
-│   │   ├── overlay_file: FileField (.png)
-│   │   ├── cell_count: int
-│   │   ├── parameters: JSON {diameter, flow_threshold, cellprob_threshold}
-│   │   ├── created_at: datetime
-│   │   │
-│   │   └── Annotation (FK → SegmentationResult)
-│   │       ├── id: UUID
-│   │       ├── mask_file: FileField (edited .npy)
-│   │       ├── version: int (auto-increment)
-│   │       ├── created_at: datetime
-│   │       └── parent_version: FK → self (nullable)
+gradio
+httpx
+numpy
+Pillow
+matplotlib
 ```
 
-**API Endpoints:**
+**Dockerfile:**
 
-| Method | Path | Purpose | Response |
-|--------|------|---------|----------|
-| `POST` | `/api/images/upload` | Upload image to project | `201 { image_id }` |
-| `POST` | `/api/images/:id/segment` | Trigger async segmentation | `202 { job_id }` |
-| `GET` | `/api/jobs/:id/status` | Poll job progress | `200 { status, progress, overlay_url }` |
-| `GET` | `/api/images/:id/overlay` | Get rendered overlay PNG | `200 image/png` |
-| `GET` | `/api/images/:id/labels` | Get label map as JSON | `200 { labels: [...] }` |
-| `POST` | `/api/annotations/:id/save` | Save edited mask (new version) | `200 { version }` |
-| `GET` | `/api/annotations/:id/history` | List annotation versions | `200 [{ version, created_at }]` |
+```dockerfile
+FROM python:3.11-slim
 
-### Model Container — FastAPI + Cellpose (hardened)
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py .
+
+EXPOSE 8001
+CMD ["python", "app.py"]
+```
+
+### Model Container — FastAPI + Cellpose (existing, hardened)
 
 **Improvements over current version:**
 
 | Current | Improved |
 |---------|----------|
-| No input validation | File size ≤ 50 MB, format whitelist, max 8192×8192 |
+| No input validation | File size max 50 MB, format whitelist, max 8192x8192 |
 | `gpu=False` hardcoded | `USE_GPU` environment variable |
-| No auth | `X-API-Key` header validation |
-| Unstructured errors | `{ error: str, code: str, detail: str }` |
-| .npy only response | Optional `?format=png` for overlay |
+| Unstructured errors | Structured error dict with code field |
 | Exposed on port 8002 | Internal network only, not port-mapped |
 
 **API Contract:**
 
 ```
+GET /health
+Response 200: { ok: true, model: "cyto3", gpu: false }
+
 POST /segment
-Headers:  X-API-Key: <key>
-Body:     multipart/form-data
-  - image: file (PNG/TIFF/JPEG, ≤ 50 MB)
+Body: multipart/form-data
+  - image: file (PNG/TIFF/JPEG, max 50 MB)
   - diameter: float (optional)
   - flow_threshold: float (default 0.4)
   - cellprob_threshold: float (default 0.0)
-  - format: str ("npy" | "png", default "npy")
 
-Response 200:
-  format=npy → application/octet-stream (numpy array)
-  format=png → image/png (colored mask)
-
-Response 422: { error, code: "VALIDATION_ERROR", detail }
-Response 500: { error, code: "SEGMENTATION_ERROR", detail }
-```
-
-### Redis
-
-- Celery message broker
-- Job status cache (TTL: 1 hour)
-- No persistence needed (ephemeral task state)
-
-### PostgreSQL
-
-- Project, Image, SegmentationResult, Annotation records
-- Persisted to `db_volume`
-- SQLite acceptable for single-user dev/POC
-
----
-
-## Frontend — Annotation Editor
-
-### Tools
-
-| Tool | Behavior | Implementation |
-|------|----------|----------------|
-| **Brush** | Paint label ID onto pixels | Canvas `fillRect` with current label color |
-| **Eraser** | Set pixels to label 0 (background) | Canvas `fillRect` with background |
-| **Merge** | Click cell A, then cell B → all B pixels become A | Flood-fill relabel in label map array |
-| **Split** | Draw line through cell → watershed split | Send line coords to backend, watershed on server |
-| **Undo** | Revert last action | Command pattern stack (label map snapshots) |
-| **Redo** | Re-apply undone action | Forward stack from undo |
-| **Zoom/Pan** | Navigate large images | CSS transform + wheel events |
-| **Opacity** | Adjust mask transparency | Canvas `globalAlpha` slider |
-
-### Client-Side State
-
-```
-EditorState {
-  originalImage: ImageBitmap       // immutable
-  labelMap: Int32Array             // W×H array of label IDs
-  colorTable: Map<int, RGBA>       // label → color
-  undoStack: LabelMap[]            // previous states
-  redoStack: LabelMap[]            // undone states
-  activeTool: "brush"|"erase"|"merge"|"split"
-  brushSize: int
-  selectedLabel: int
-  opacity: float
-}
+Response 200: application/octet-stream (masks as numpy .npy)
+Response 422: { detail: "validation error message" }
+Response 500: { detail: "segmentation error message" }
 ```
 
 ---
 
-## Docker Compose — Production
+## App Container — Full Source Code
+
+```python
+import io
+import tempfile
+import numpy as np
+import httpx
+import gradio as gr
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from PIL import Image
+
+MODEL_URL = "http://model:8000/segment"
+
+
+def segment(image, diameter, flow_threshold, cellprob_threshold):
+    """Upload image to Model Container, return overlay + stats."""
+    if image is None:
+        raise gr.Error("Please upload an image first.")
+
+    # Encode image as PNG bytes
+    buf = io.BytesIO()
+    Image.fromarray(image).save(buf, format="PNG")
+    buf.seek(0)
+
+    # Call Model Container
+    try:
+        resp = httpx.post(
+            MODEL_URL,
+            files={"image": ("image.png", buf.getvalue(), "image/png")},
+            data={
+                "diameter": diameter if diameter > 0 else "",
+                "flow_threshold": flow_threshold,
+                "cellprob_threshold": cellprob_threshold,
+            },
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise gr.Error(f"Segmentation failed: {e.response.text}")
+    except httpx.ConnectError:
+        raise gr.Error("Model container unavailable. Is it running?")
+
+    # Parse masks
+    masks = np.load(io.BytesIO(resp.content))
+    labels = np.unique(masks)
+    labels = labels[labels != 0]  # exclude background
+    cell_count = len(labels)
+
+    # --- Colored overlay ---
+    overlay = image.copy().astype(np.float32) / 255.0
+    cmap = plt.cm.get_cmap("tab20", max(cell_count, 1))
+    for i, label_id in enumerate(labels):
+        color = np.array(cmap(i % 20)[:3])
+        mask = masks == label_id
+        overlay[mask] = overlay[mask] * 0.45 + color * 0.55
+    overlay_uint8 = (overlay * 255).astype(np.uint8)
+
+    # --- Per-cell stats ---
+    total_pixels = masks.shape[0] * masks.shape[1]
+    stats_rows = []
+    areas = []
+    for label_id in labels:
+        area_px = int(np.sum(masks == label_id))
+        areas.append(area_px)
+        stats_rows.append({
+            "Cell ID": int(label_id),
+            "Area (px)": area_px,
+            "Area (%)": round(area_px / total_pixels * 100, 3),
+        })
+
+    # --- Summary ---
+    areas_arr = np.array(areas) if areas else np.array([0])
+    summary = (
+        f"{cell_count} cells detected\n"
+        f"Mean area: {areas_arr.mean():.0f} px | "
+        f"Median: {np.median(areas_arr):.0f} px | "
+        f"Std: {areas_arr.std():.0f} px\n"
+        f"Smallest: {areas_arr.min()} px | "
+        f"Largest: {areas_arr.max()} px"
+    )
+
+    # --- Histogram ---
+    fig, ax = plt.subplots(figsize=(6, 3))
+    if cell_count > 0:
+        ax.hist(areas, bins=min(30, cell_count), color="#2E7D32", edgecolor="white")
+    ax.set_xlabel("Cell area (pixels)")
+    ax.set_ylabel("Count")
+    ax.set_title("Cell size distribution")
+    fig.tight_layout()
+
+    # --- Downloadable files ---
+    overlay_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+    Image.fromarray(overlay_uint8).save(overlay_path)
+    masks_path = tempfile.NamedTemporaryFile(suffix=".npy", delete=False).name
+    np.save(masks_path, masks)
+
+    return overlay_uint8, summary, stats_rows, fig, overlay_path, masks_path
+
+
+# --- Gradio UI ---
+with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
+    gr.Markdown("# Cell Segmentation (Cellpose cyto3)")
+    gr.Markdown("Upload a microscopy image, adjust parameters, and get segmentation results.")
+
+    with gr.Row():
+        with gr.Column(scale=1):
+            img_input = gr.Image(type="numpy", label="Upload image")
+            diameter = gr.Slider(0, 200, value=30, step=1, label="Diameter (0 = auto)")
+            flow_thresh = gr.Slider(0, 1, value=0.4, step=0.05, label="Flow threshold")
+            cellprob_thresh = gr.Slider(-6, 6, value=0.0, step=0.5, label="Cell probability threshold")
+            submit_btn = gr.Button("Segment", variant="primary")
+
+        with gr.Column(scale=2):
+            overlay_output = gr.Image(label="Segmentation overlay")
+            summary_box = gr.Textbox(label="Summary", lines=3)
+
+    with gr.Row():
+        stats_table = gr.Dataframe(label="Per-cell statistics", headers=["Cell ID", "Area (px)", "Area (%)"])
+        histogram = gr.Plot(label="Size distribution")
+
+    with gr.Row():
+        overlay_file = gr.File(label="Download overlay PNG")
+        masks_file = gr.File(label="Download masks.npy")
+
+    submit_btn.click(
+        fn=segment,
+        inputs=[img_input, diameter, flow_thresh, cellprob_thresh],
+        outputs=[overlay_output, summary_box, stats_table, histogram, overlay_file, masks_file],
+    )
+
+demo.launch(server_name="0.0.0.0", server_port=8001)
+```
+
+---
+
+## Docker Compose
 
 ```yaml
 services:
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - static_volume:/static
-      - media_volume:/media
-    depends_on:
-      app:
-        condition: service_healthy
-
   app:
     build: ./App_container
-    expose:
-      - "8001"
+    ports:
+      - "8001:8001"
     environment:
-      - DATABASE_URL=postgres://user:pass@db:5432/cellseg
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - MODEL_API_URL=http://model:8000
-      - MODEL_API_KEY=${MODEL_API_KEY}
-    volumes:
-      - media_volume:/app/media
-      - static_volume:/app/static
+      - GRADIO_SERVER_NAME=0.0.0.0
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
       model:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 15s
-      retries: 3
-
-  celery:
-    build: ./App_container
-    command: celery -A config worker -l info --concurrency=2
-    environment:
-      - DATABASE_URL=postgres://user:pass@db:5432/cellseg
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - MODEL_API_URL=http://model:8000
-      - MODEL_API_KEY=${MODEL_API_KEY}
-    volumes:
-      - media_volume:/app/media
-    depends_on:
-      - redis
-      - model
 
   model:
     build: ./Model_container
@@ -404,7 +354,6 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - USE_GPU=false
-      - API_KEY=${MODEL_API_KEY}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -414,30 +363,9 @@ services:
       resources:
         limits:
           memory: 4G
-
-  redis:
-    image: redis:7-alpine
-    expose:
-      - "6379"
-
-  db:
-    image: postgres:16-alpine
-    environment:
-      - POSTGRES_DB=cellseg
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-    volumes:
-      - db_volume:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d cellseg"]
-      interval: 10s
-      retries: 5
-
-volumes:
-  media_volume:
-  static_volume:
-  db_volume:
 ```
+
+**That's the entire infrastructure.** Two containers. No Nginx, no Redis, no PostgreSQL, no Celery.
 
 ---
 
@@ -445,38 +373,68 @@ volumes:
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| App framework | Django 5 + DRF | ORM, admin panel, file handling — good for a POC that may grow |
-| Task queue | Celery + Redis | Proven async pattern for long-running jobs; progress tracking built in |
-| Frontend | Django templates + HTMX + Canvas | No JS build toolchain; HTMX handles polling; Canvas handles pixel editing |
-| Overlay rendering | Server-side (numpy + Pillow) | Avoids shipping .npy to browser; simpler frontend |
-| Annotation storage | Versioned .npy files | Each save creates a new version; full undo history on disk |
-| Model Container isolation | Internal network, no port mapping | Only the App Container can reach it; attack surface minimized |
+| App framework | Gradio | Single .py file, built-in upload/slider/image/table widgets, zero JS |
+| Overlay rendering | In-process (numpy + matplotlib) | No separate service needed, runs inside Gradio callback |
+| Architecture | Synchronous call | POC scope, no need for async queue for single-user use |
+| Model Container | Unchanged from existing | Already works, just hide behind internal network |
+| No database | Stateless | Results are ephemeral; user downloads what they need |
+| No Nginx | Gradio serves directly | Single user, no TLS/rate limiting needed for POC |
+
+---
+
+## What's Included vs. Deferred
+
+| Feature | POC v1 (now) | Future |
+|---------|-------------|--------|
+| Image upload | Drag-and-drop via Gradio | Same |
+| Parameter tuning | Sliders for diameter, flow, cellprob | Model selection dropdown |
+| Segmentation | Sync call to Model Container | Async with progress bar |
+| Cell count | Displayed in summary | Same |
+| Per-cell statistics | Area table + histogram | Morphology metrics (circularity, eccentricity) |
+| Colored overlay | Alpha-composited on original | Adjustable opacity slider |
+| Download results | PNG overlay + .npy masks | CSV stats export |
+| Annotation editing | Not included | Brush, erase, merge, split (Phase 2) |
+| Multi-user | Not included | Auth + project management (Phase 3) |
+| Database | Not included | PostgreSQL for history (Phase 3) |
+| Batch processing | Not included | Upload folder, process all (Phase 2) |
+| 3D segmentation | Not included | Z-stack support (Phase 3) |
 
 ---
 
 ## Security Considerations
 
-- Model Container is **never exposed** to the public network
-- API key required for internal Model API calls
-- Nginx enforces upload size limits (50 MB)
-- Input validation at both App and Model layers (defense in depth)
-- File type validation by magic bytes, not just extension
-- No user-supplied filenames used in paths (UUID-based storage)
-- Environment variables for all secrets (`.env` file, not committed)
+- Model Container is **not exposed** — internal Docker network only
+- Gradio handles file upload validation (type checking built-in)
+- No user-supplied filenames used in processing (temp files with random names)
+- No database credentials to protect (stateless)
+- `httpx` timeout prevents indefinite hangs on Model Container
+- Memory limit on Model Container prevents OOM from adversarial inputs
 
 ---
 
 ## What Changed vs. Original Concept
 
-| Original | Improved |
-|----------|----------|
-| 2 containers, both exposed | 6 services, only Nginx exposed |
-| Storage "optional" | Storage mandatory (PostgreSQL + volumes) |
-| Sync HTTP only | Async jobs (Celery) + polling |
-| No input validation | Validation at Nginx, App, and Model layers |
-| .npy over HTTP to browser | Server-side overlay rendering → PNG |
-| No auth | API key auth on internal calls |
-| No error contract | Structured error responses |
-| No edit versioning | Versioned annotation history |
-| Hardcoded GPU=false | Configurable via environment |
-| Broken docker-compose | Full multi-service compose with healthchecks |
+| Original Concept | POC v1 |
+|-----------------|--------|
+| App Container: Django + DRF + Celery + Redis | App Container: single Gradio .py file |
+| 6 services (Nginx, App, Celery, Model, Redis, PostgreSQL) | 2 services (Gradio App + Cellpose Model) |
+| Annotation editing (brush, erase, merge, split) | Not included — focus on results |
+| Async job queue | Synchronous HTTP call |
+| Versioned annotation storage | Stateless — download and go |
+| Weeks of development | Hours of development |
+| Complex docker-compose with healthchecks, volumes, env files | Minimal docker-compose, 2 services |
+| REST API design, ORM models, frontend templates | Zero API design — Gradio handles everything |
+
+---
+
+## Upgrade Path to Full Platform
+
+When the POC is validated and annotation editing is needed:
+
+1. **Phase 2 — Add CVAT**: Deploy CVAT alongside the existing containers. Write a CVAT serverless function (~50 lines) that calls the Model Container. Users get full browser-based annotation tools (brush, erase, polygon, undo/redo) with zero custom frontend code. Keep Gradio for quick analysis.
+
+2. **Phase 3 — Add persistence**: Add PostgreSQL + volume mounts to track projects, images, and segmentation history. Add batch processing.
+
+3. **Phase 4 — Add auth**: Multi-user support, project-level permissions, API keys.
+
+Each phase is additive — the existing Gradio app and Model Container continue working unchanged.
