@@ -72,18 +72,18 @@ spec:
               value: {{ .Values.model.useGpu | quote }}
           resources:
             {{- toYaml .Values.model.resources | nindent 12 }}
-          # Model weights (~1 GB) are downloaded on first start — allow 3 minutes before probing
+          # Weights are baked into the image — pod is ready in ~10s
           livenessProbe:
             httpGet:
               path: /health
               port: {{ .Values.model.port }}
-            initialDelaySeconds: 180
-            periodSeconds: 30
+            initialDelaySeconds: 30
+            periodSeconds: 20
             failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /health
               port: {{ .Values.model.port }}
-            initialDelaySeconds: 120
-            periodSeconds: 15
-            failureThreshold: 10
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6

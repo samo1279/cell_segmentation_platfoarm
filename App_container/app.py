@@ -40,9 +40,11 @@ def segment(image, diameter, flow_threshold, cellprob_threshold):
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as e:
-        raise gr.Error(f"Segmentation failed: {e.response.text}")
-    except httpx.ConnectError:
-        raise gr.Error("Model container unavailable. Is it running?")
+        raise gr.Error(f"Segmentation failed (HTTP {e.response.status_code}): {e.response.text}")
+    except httpx.TimeoutException:
+        raise gr.Error("Request timed out. The model may still be loading — please wait 30 seconds and try again.")
+    except httpx.RequestError as e:
+        raise gr.Error(f"Cannot reach model container ({type(e).__name__}). It may still be starting — please wait 30 seconds and retry.")
 
     # Parse masks
     masks = np.load(io.BytesIO(resp.content))

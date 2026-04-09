@@ -20,7 +20,7 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
       retries: 5
-      start_period: 120s
+      start_period: 30s
     deploy:
       resources:
         limits:
