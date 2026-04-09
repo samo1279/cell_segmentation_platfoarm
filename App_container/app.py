@@ -101,12 +101,22 @@ def segment(image, diameter, flow_threshold, cellprob_threshold):
     fig.tight_layout()
 
     # --- Downloadable files ---
-    overlay_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+    # Use delete=False so the file persists while Gradio serves it to the browser.
+    # Return overlay_path (a stable on-disk file) for gr.Image instead of a raw
+    # numpy array — this avoids Gradio writing its own temp file that can be
+    # swept by its cleanup cycle before the browser finishes fetching it
+    # (which caused FileNotFoundError: /tmp/gradio/<hash>/... in logs).
+    overlay_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    overlay_path = overlay_tmp.name
+    overlay_tmp.close()
     Image.fromarray(overlay_uint8).save(overlay_path)
-    masks_path = tempfile.NamedTemporaryFile(suffix=".npy", delete=False).name
+
+    masks_tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
+    masks_path = masks_tmp.name
+    masks_tmp.close()
     np.save(masks_path, masks)
 
-    return overlay_uint8, summary, stats_rows, fig, overlay_path, masks_path
+    return overlay_path, summary, stats_rows, fig, overlay_path, masks_path
 
 
 # --- Gradio UI ---

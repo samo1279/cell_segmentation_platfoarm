@@ -9,9 +9,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download cyto3 model weights so they are baked into the image.
-# This avoids runtime downloads inside the cluster and makes startup fast.
-RUN python -c "from cellpose import models; models.CellposeModel(pretrained_model='cyto3'); print('cyto3 weights downloaded')"
+# Pre-download cpsam model weights so they are baked into the image.
+# Cellpose v4 renamed the default model from cyto3 → cpsam; using the exact
+# name ensures the baked cache key matches what runtime looks for.
+RUN python -c "from cellpose import models; models.CellposeModel(pretrained_model='cpsam'); print('cpsam weights downloaded')"
 
 COPY cellpose_api/app.py .
 

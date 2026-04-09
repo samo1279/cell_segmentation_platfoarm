@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     MODEL = await loop.run_in_executor(
         None,
-        lambda: models.CellposeModel(gpu=USE_GPU, pretrained_model="cyto3"),
+        lambda: models.CellposeModel(gpu=USE_GPU, pretrained_model="cpsam"),
     )
     logger.info("Model loaded successfully")
     yield
@@ -45,10 +45,12 @@ ALLOWED_EXTENSIONS = {".png", ".tiff", ".tif", ".jpeg", ".jpg"}
 
 
 @app.get("/health")
-def health():
+async def health():
+    # async def runs directly on the event loop — never queued in the thread pool.
+    # This guarantees /health responds instantly even while MODEL.eval() is running.
     if MODEL is None:
         return JSONResponse(status_code=503, content={"ok": False, "status": "loading"})
-    return {"ok": True, "model": "cyto3", "gpu": USE_GPU}
+    return {"ok": True, "model": "cpsam", "gpu": USE_GPU}
 
 
 @app.get("/parameters")
@@ -121,12 +123,19 @@ async def segment(
     logger.info(f"Processing image: {image.filename}, shape={img.shape}")
 
     # --- Segmentation ---
+    # Run MODEL.eval() in a thread-pool executor so the async event loop stays
+    # free to handle /health probes while inference runs (30–120 s on large images).
+    # Without this, the event loop is blocked and /health times out → liveness kills the pod.
     try:
-        result = MODEL.eval(
-            img,
-            diameter=diameter,
-            flow_threshold=flow_threshold,
-            cellprob_threshold=cellprob_threshold,
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: MODEL.eval(
+                img,
+                diameter=diameter,
+                flow_threshold=flow_threshold,
+                cellprob_threshold=cellprob_threshold,
+            ),
         )
     except Exception as e:
         logger.error(f"Segmentation error: {str(e)}")
