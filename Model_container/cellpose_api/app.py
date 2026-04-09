@@ -2,8 +2,9 @@ import io
 import os
 import numpy as np
 import imageio.v3 as iio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from cellpose import models
 import logging
 
@@ -12,12 +13,22 @@ logger = logging.getLogger(__name__)
 
 USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
 
-app = FastAPI(title="Cellpose Segmentation API")
+# Model is loaded during startup so uvicorn binds port 8000 immediately.
+# /health returns 503 until loading completes; the readiness probe waits for 200.
+MODEL = None
 
-logger.info(f"Loading Cellpose model (gpu={USE_GPU})...")
-MODEL = models.CellposeModel(gpu=USE_GPU, pretrained_model="cyto3")
-logger.info(f"Model Architecture:\n{MODEL.net}")
-logger.info("Model loaded successfully")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global MODEL
+    logger.info(f"Loading Cellpose model (gpu={USE_GPU})...")
+    MODEL = models.CellposeModel(gpu=USE_GPU, pretrained_model="cyto3")
+    logger.info("Model loaded successfully")
+    yield
+    MODEL = None
+
+
+app = FastAPI(title="Cellpose Segmentation API", lifespan=lifespan)
 
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 MAX_DIMENSION = 8192
@@ -27,6 +38,8 @@ ALLOWED_EXTENSIONS = {".png", ".tiff", ".tif", ".jpeg", ".jpg"}
 
 @app.get("/health")
 def health():
+    if MODEL is None:
+        return JSONResponse(status_code=503, content={"ok": False, "status": "loading"})
     return {"ok": True, "model": "cyto3", "gpu": USE_GPU}
 
 
@@ -64,6 +77,9 @@ async def segment(
     flow_threshold: float = Form(default=0.4),
     cellprob_threshold: float = Form(default=0.0),
 ):
+    if MODEL is None:
+        raise HTTPException(status_code=503, detail="Model is still loading, please retry in a few seconds.")
+
     # --- Input validation ---
     ext = os.path.splitext(image.filename or "")[1].lower()
     content_type = (image.content_type or "").lower()

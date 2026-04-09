@@ -3,7 +3,7 @@ app:
   image:
     repository: localhost:32000/cellpose-poc-app
     tag: latest
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   port: 8001
   resources:
     requests:
@@ -18,7 +18,7 @@ model:
   image:
     repository: localhost:32000/cellpose-poc-model
     tag: latest
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   port: 8000
   # Set to true only if the cluster has the NVIDIA device plugin enabled (microk8s enable gpu)
   useGpu: false
