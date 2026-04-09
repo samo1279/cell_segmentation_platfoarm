@@ -127,7 +127,6 @@ async def segment(
             diameter=diameter,
             flow_threshold=flow_threshold,
             cellprob_threshold=cellprob_threshold,
-            channels=[0, 0],
         )
     except Exception as e:
         logger.error(f"Segmentation error: {str(e)}")

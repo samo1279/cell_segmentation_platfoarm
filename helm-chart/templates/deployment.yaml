@@ -72,22 +72,31 @@ spec:
               value: {{ .Values.model.useGpu | quote }}
           resources:
             {{- toYaml .Values.model.resources | nindent 12 }}
-          # /health returns 503 while the model loads, then 200.
-          # readinessProbe keeps the pod out of rotation during load (503 = not ready).
-          # livenessProbe only fires after 120 s so it never kills the pod during load.
+          # startupProbe gates liveness entirely until /health returns 200.
+          # This is the correct K8s pattern for slow-starting containers.
+          # 30 attempts × 10 s = up to 300 s (5 min) for model to become ready.
+          # During this window the liveness probe is DISABLED — pod is never killed.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.model.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+          # Once startupProbe succeeds, readiness keeps pod in service
           readinessProbe:
             httpGet:
               path: /health
               port: {{ .Values.model.port }}
-            initialDelaySeconds: 30
             periodSeconds: 10
-            failureThreshold: 12
+            failureThreshold: 3
             timeoutSeconds: 5
+          # Liveness only kills on persistent failure after full startup
           livenessProbe:
             httpGet:
               path: /health
               port: {{ .Values.model.port }}
-            initialDelaySeconds: 120
             periodSeconds: 30
             failureThreshold: 5
             timeoutSeconds: 5
