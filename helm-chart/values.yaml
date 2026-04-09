@@ -25,10 +25,12 @@ model:
   resources:
     requests:
       cpu: 500m
-      memory: 2Gi
+      memory: 4Gi
     limits:
-      cpu: 4000m
-      memory: 8Gi
+      # No memory limit — server has 1000 GB RAM; let the OS manage it.
+      # A hard limit causes OOMKill even when the node has free RAM.
+      cpu: 8000m
+      memory: 64Gi
 
 # --- Ingress ---
 ingress:
