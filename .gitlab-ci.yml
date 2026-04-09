@@ -66,11 +66,11 @@ deploy:
     - main
 
 # ── Verify: dump server-side state into CI job output ─────────────────────────
-# Run after deploy. Uses microk8s kubectl (available on the a40gpu runner node).
-# Open the GitLab CI job "verify" to see pod status, events, and live logs.
+# Uses bitnami/kubectl — the runner pod's service account already has cluster
+# access (the same account that lets helm deploy succeed).
 verify:
   stage: verify
-  image: alpine:3.19
+  image: bitnami/kubectl:latest
   tags:
     - a40gpu
   needs: [deploy]
@@ -79,31 +79,31 @@ verify:
     - NS="$APP_NAME"
 
     - echo "======== POD STATUS ========"
-    - microk8s kubectl get pods -n "$NS" -o wide
+    - kubectl get pods -n "$NS" -o wide
 
     - echo "======== RESTART COUNTS ========"
-    - microk8s kubectl get pods -n "$NS" -o custom-columns="NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,STATUS:.status.phase"
+    - kubectl get pods -n "$NS" -o custom-columns="NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,STATUS:.status.phase"
 
     - echo "======== POD EVENTS (model) ========"
-    - microk8s kubectl describe pod -n "$NS" -l "app=${APP_NAME}-model" | tail -40
+    - kubectl describe pod -n "$NS" -l "app=${APP_NAME}-model" | tail -50
 
     - echo "======== POD EVENTS (app) ========"
-    - microk8s kubectl describe pod -n "$NS" -l "app=${APP_NAME}-app" | tail -20
+    - kubectl describe pod -n "$NS" -l "app=${APP_NAME}-app" | tail -30
 
     - echo "======== MODEL CONTAINER LOGS (last 80 lines) ========"
-    - microk8s kubectl logs -n "$NS" -l "app=${APP_NAME}-model" --tail=80 || true
+    - kubectl logs -n "$NS" -l "app=${APP_NAME}-model" --tail=80 || true
 
     - echo "======== APP CONTAINER LOGS (last 40 lines) ========"
-    - microk8s kubectl logs -n "$NS" -l "app=${APP_NAME}-app" --tail=40 || true
+    - kubectl logs -n "$NS" -l "app=${APP_NAME}-app" --tail=40 || true
 
     - echo "======== SERVICES ========"
-    - microk8s kubectl get svc -n "$NS"
+    - kubectl get svc -n "$NS"
 
     - echo "======== HEALTH CHECK ========"
-    - APP_POD=$(microk8s kubectl get pod -n "$NS" -l "app=${APP_NAME}-app" -o jsonpath='{.items[0].metadata.name}')
-    - microk8s kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,sys; r=httpx.get("http://cellpose-poc-model:8000/health",timeout=10); print("health:",r.status_code,r.text); sys.exit(0 if r.status_code==200 else 1)' || true
+    - APP_POD=$(kubectl get pod -n "$NS" -l "app=${APP_NAME}-app" -o jsonpath='{.items[0].metadata.name}')
+    - kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,sys; r=httpx.get("http://cellpose-poc-model:8000/health",timeout=15); print("health:",r.status_code,r.text); sys.exit(0 if r.status_code==200 else 1)' || true
 
     - echo "======== SEGMENT TEST ========"
-    - microk8s kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,numpy as np,io; from PIL import Image; img=np.zeros((64,64,3),dtype=np.uint8); buf=io.BytesIO(); Image.fromarray(img).save(buf,format="PNG"); buf.seek(0); r=httpx.post("http://cellpose-poc-model:8000/segment",files={"image":("t.png",buf.getvalue(),"image/png")},data={"flow_threshold":"0.4","cellprob_threshold":"0.0"},timeout=120); print("segment:",r.status_code,"masks shape:",np.load(io.BytesIO(r.content)).shape if r.status_code==200 else r.text[:200])' || true
+    - kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,numpy as np,io; from PIL import Image; img=np.zeros((64,64,3),dtype=np.uint8); buf=io.BytesIO(); Image.fromarray(img).save(buf,format="PNG"); buf.seek(0); r=httpx.post("http://cellpose-poc-model:8000/segment",files={"image":("t.png",buf.getvalue(),"image/png")},data={"flow_threshold":"0.4","cellprob_threshold":"0.0"},timeout=120); print("segment:",r.status_code,"masks shape:",np.load(io.BytesIO(r.content)).shape if r.status_code==200 else r.text[:200])' || true
   only:
     - main
