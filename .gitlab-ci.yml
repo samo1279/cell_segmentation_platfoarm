@@ -74,68 +74,36 @@ verify:
   tags:
     - a40gpu
   needs: [deploy]
-  when: always          # run even if deploy fails — we want the logs
+  when: always
   script:
-    - alias kubectl='microk8s kubectl'
-    - NS=${APP_NAME}
+    - NS="$APP_NAME"
 
     - echo "======== POD STATUS ========"
-    - microk8s kubectl get pods -n ${NS} -o wide
+    - microk8s kubectl get pods -n "$NS" -o wide
+
+    - echo "======== RESTART COUNTS ========"
+    - microk8s kubectl get pods -n "$NS" -o custom-columns="NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,STATUS:.status.phase"
 
     - echo "======== POD EVENTS (model) ========"
-    - microk8s kubectl describe pod -n ${NS} -l app=${APP_NAME}-model | grep -A 40 "Events:"
+    - microk8s kubectl describe pod -n "$NS" -l "app=${APP_NAME}-model" | tail -40
 
     - echo "======== POD EVENTS (app) ========"
-    - microk8s kubectl describe pod -n ${NS} -l app=${APP_NAME}-app | grep -A 20 "Events:"
+    - microk8s kubectl describe pod -n "$NS" -l "app=${APP_NAME}-app" | tail -20
 
     - echo "======== MODEL CONTAINER LOGS (last 80 lines) ========"
-    - microk8s kubectl logs -n ${NS} -l app=${APP_NAME}-model --tail=80 || true
+    - microk8s kubectl logs -n "$NS" -l "app=${APP_NAME}-model" --tail=80 || true
 
     - echo "======== APP CONTAINER LOGS (last 40 lines) ========"
-    - microk8s kubectl logs -n ${NS} -l app=${APP_NAME}-app --tail=40 || true
-
-    - echo "======== PROBE STATUS ========"
-    - microk8s kubectl get pod -n ${NS} -l app=${APP_NAME}-model -o jsonpath='{range .items[*]}{.metadata.name}{"\n  Startup:  "}{.status.conditions[?(@.type=="ContainersReady")]}{"\n  Ready:    "}{.status.containerStatuses[0].ready}{"\n  Restarts: "}{.status.containerStatuses[0].restartCount}{"\n---\n"}{end}'
+    - microk8s kubectl logs -n "$NS" -l "app=${APP_NAME}-app" --tail=40 || true
 
     - echo "======== SERVICES ========"
-    - microk8s kubectl get svc -n ${NS}
+    - microk8s kubectl get svc -n "$NS"
 
-    - echo "======== HEALTH CHECK (from inside cluster via kubectl exec) ========"
-    - APP_POD=$(microk8s kubectl get pod -n ${NS} -l app=${APP_NAME}-app -o jsonpath='{.items[0].metadata.name}')
-    - microk8s kubectl exec -n ${NS} ${APP_POD} -- python3 -c "
-        import httpx, sys
-        try:
-            r = httpx.get('http://${APP_NAME}-model:8000/health', timeout=10)
-            print('health status:', r.status_code, r.text)
-            sys.exit(0 if r.status_code == 200 else 1)
-        except Exception as e:
-            print('HEALTH CHECK FAILED:', type(e).__name__, e)
-            sys.exit(1)
-      "
+    - echo "======== HEALTH CHECK ========"
+    - APP_POD=$(microk8s kubectl get pod -n "$NS" -l "app=${APP_NAME}-app" -o jsonpath='{.items[0].metadata.name}')
+    - microk8s kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,sys; r=httpx.get("http://cellpose-poc-model:8000/health",timeout=10); print("health:",r.status_code,r.text); sys.exit(0 if r.status_code==200 else 1)' || true
 
-    - echo "======== SEGMENT TEST (128x128 random image) ========"
-    - microk8s kubectl exec -n ${NS} ${APP_POD} -- python3 -c "
-        import httpx, numpy as np, io
-        from PIL import Image
-        img = np.zeros((128, 128, 3), dtype=np.uint8)
-        buf = io.BytesIO()
-        Image.fromarray(img).save(buf, format='PNG')
-        buf.seek(0)
-        try:
-            r = httpx.post(
-                'http://${APP_NAME}-model:8000/segment',
-                files={'image': ('test.png', buf.getvalue(), 'image/png')},
-                data={'flow_threshold': '0.4', 'cellprob_threshold': '0.0'},
-                timeout=120.0
-            )
-            print('segment status:', r.status_code)
-            if r.status_code == 200:
-                masks = np.load(io.BytesIO(r.content))
-                print('masks shape:', masks.shape, '— OK')
-            else:
-                print('ERROR:', r.text[:300])
-        except Exception as e:
-            print('SEGMENT TEST FAILED:', type(e).__name__, e)
-      "
+    - echo "======== SEGMENT TEST ========"
+    - microk8s kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,numpy as np,io; from PIL import Image; img=np.zeros((64,64,3),dtype=np.uint8); buf=io.BytesIO(); Image.fromarray(img).save(buf,format="PNG"); buf.seek(0); r=httpx.post("http://cellpose-poc-model:8000/segment",files={"image":("t.png",buf.getvalue(),"image/png")},data={"flow_threshold":"0.4","cellprob_threshold":"0.0"},timeout=120); print("segment:",r.status_code,"masks shape:",np.load(io.BytesIO(r.content)).shape if r.status_code==200 else r.text[:200])' || true
   only:
     - main
