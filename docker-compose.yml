@@ -5,6 +5,7 @@ services:
       - "8001:8001"
     environment:
       - GRADIO_SERVER_NAME=0.0.0.0
+      - MODEL_URL=http://model:8000/segment
     depends_on:
       model:
         condition: service_healthy

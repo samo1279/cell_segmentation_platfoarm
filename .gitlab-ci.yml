@@ -59,5 +59,7 @@ deploy:
       --set ingress.host=${APP_DOMAIN}
       --namespace ${APP_NAME}
       --create-namespace
+      --wait
+      --timeout 10m0s
   only:
     - main
