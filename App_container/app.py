@@ -23,15 +23,19 @@ def segment(image, diameter, flow_threshold, cellprob_threshold):
     buf.seek(0)
 
     # Call Model Container
+    # Build form data; omit diameter entirely when 0 so FastAPI keeps it as None (auto-detect)
+    form_data = {
+        "flow_threshold": flow_threshold,
+        "cellprob_threshold": cellprob_threshold,
+    }
+    if diameter > 0:
+        form_data["diameter"] = diameter
+
     try:
         resp = httpx.post(
             MODEL_URL,
             files={"image": ("image.png", buf.getvalue(), "image/png")},
-            data={
-                "diameter": diameter if diameter > 0 else "",
-                "flow_threshold": flow_threshold,
-                "cellprob_threshold": cellprob_threshold,
-            },
+            data=form_data,
             timeout=120.0,
         )
         resp.raise_for_status()

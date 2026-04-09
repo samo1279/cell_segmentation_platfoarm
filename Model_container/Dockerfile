@@ -9,6 +9,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download cyto3 model weights so they are baked into the image.
+# This avoids runtime downloads inside the cluster and makes startup fast.
+RUN python -c "from cellpose import models; models.CellposeModel(pretrained_model='cyto3'); print('cyto3 weights downloaded')"
+
 COPY cellpose_api/app.py .
 
 EXPOSE 8000
