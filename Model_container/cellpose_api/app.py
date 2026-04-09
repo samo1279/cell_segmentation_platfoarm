@@ -1,3 +1,4 @@
+import asyncio
 import io
 import os
 import numpy as np
@@ -20,9 +21,16 @@ MODEL = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Load the model in a thread-pool executor so the event loop stays
+    unblocked during the 30-90 s load.  /health returns 503 until done,
+    allowing readiness probes to report not-ready without killing the pod."""
     global MODEL
     logger.info(f"Loading Cellpose model (gpu={USE_GPU})...")
-    MODEL = models.CellposeModel(gpu=USE_GPU, pretrained_model="cyto3")
+    loop = asyncio.get_event_loop()
+    MODEL = await loop.run_in_executor(
+        None,
+        lambda: models.CellposeModel(gpu=USE_GPU, pretrained_model="cyto3"),
+    )
     logger.info("Model loaded successfully")
     yield
     MODEL = None
