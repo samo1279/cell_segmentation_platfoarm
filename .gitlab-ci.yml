@@ -66,8 +66,6 @@ deploy:
     - main
 
 # ── Verify: dump server-side state into CI job output ─────────────────────────
-# Uses bitnami/kubectl — the runner pod's service account already has cluster
-# access (the same account that lets helm deploy succeed).
 verify:
   stage: verify
   image: bitnami/kubectl:latest
@@ -78,32 +76,49 @@ verify:
   script:
     - NS="$APP_NAME"
 
-    - echo "======== POD STATUS ========"
+    - echo "===== 1. POD STATUS ====="
     - kubectl get pods -n "$NS" -o wide
 
-    - echo "======== RESTART COUNTS ========"
-    - kubectl get pods -n "$NS" -o custom-columns="NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,STATUS:.status.phase"
+    - echo "===== 2. FULL MODEL POD DESCRIBE (includes OOMKill, probe failures) ====="
+    - kubectl describe pod -n "$NS" -l "app=${APP_NAME}-model"
 
-    - echo "======== POD EVENTS (model) ========"
-    - kubectl describe pod -n "$NS" -l "app=${APP_NAME}-model" | tail -50
+    - echo "===== 3. MODEL LOGS — current ====="
+    - kubectl logs -n "$NS" -l "app=${APP_NAME}-model" --tail=100 || true
 
-    - echo "======== POD EVENTS (app) ========"
-    - kubectl describe pod -n "$NS" -l "app=${APP_NAME}-app" | tail -30
+    - echo "===== 4. MODEL LOGS — previous container (crash logs) ====="
+    - kubectl logs -n "$NS" -l "app=${APP_NAME}-model" --previous --tail=100 || echo "no previous container"
 
-    - echo "======== MODEL CONTAINER LOGS (last 80 lines) ========"
-    - kubectl logs -n "$NS" -l "app=${APP_NAME}-model" --tail=80 || true
+    - echo "===== 5. APP LOGS — current ====="
+    - kubectl logs -n "$NS" -l "app=${APP_NAME}-app" --tail=50 || true
 
-    - echo "======== APP CONTAINER LOGS (last 40 lines) ========"
-    - kubectl logs -n "$NS" -l "app=${APP_NAME}-app" --tail=40 || true
-
-    - echo "======== SERVICES ========"
+    - echo "===== 6. SERVICES AND ENDPOINTS ====="
     - kubectl get svc -n "$NS"
+    - kubectl get endpoints -n "$NS"
 
-    - echo "======== HEALTH CHECK ========"
+    - echo "===== 7. NODE RESOURCES ====="
+    - kubectl top nodes || echo "metrics-server not available"
+    - kubectl top pods -n "$NS" || echo "metrics-server not available"
+
+    - echo "===== 8. IMAGE PULL STATUS (are new images actually running?) ====="
+    - kubectl get pods -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{" image="}{.status.containerStatuses[0].image}{" state="}{.status.containerStatuses[0].state}{"\n"}{end}'
+
+    - echo "===== 9. WAIT FOR MODEL READY (up to 3 min) ====="
+    - |
+      for i in $(seq 1 18); do
+        STATUS=$(kubectl get pod -n "$NS" -l "app=${APP_NAME}-model" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "unknown")
+        echo "attempt $i/18 — model ready=$STATUS"
+        if [ "$STATUS" = "true" ]; then
+          echo "Model is ready!"
+          break
+        fi
+        sleep 10
+      done
+
+    - echo "===== 10. HEALTH CHECK (direct TCP from app pod) ====="
     - APP_POD=$(kubectl get pod -n "$NS" -l "app=${APP_NAME}-app" -o jsonpath='{.items[0].metadata.name}')
     - kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,sys; r=httpx.get("http://cellpose-poc-model:8000/health",timeout=15); print("health:",r.status_code,r.text); sys.exit(0 if r.status_code==200 else 1)' || true
 
-    - echo "======== SEGMENT TEST ========"
+    - echo "===== 11. SEGMENT TEST ====="
     - kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,numpy as np,io; from PIL import Image; img=np.zeros((64,64,3),dtype=np.uint8); buf=io.BytesIO(); Image.fromarray(img).save(buf,format="PNG"); buf.seek(0); r=httpx.post("http://cellpose-poc-model:8000/segment",files={"image":("t.png",buf.getvalue(),"image/png")},data={"flow_threshold":"0.4","cellprob_threshold":"0.0"},timeout=120); print("segment:",r.status_code,"masks shape:",np.load(io.BytesIO(r.content)).shape if r.status_code==200 else r.text[:200])' || true
   only:
     - main
