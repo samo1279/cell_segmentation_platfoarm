@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Phase 1 Complete (POC v1 Foundation)
 
+### Fixed
+- `Model_container/cellpose_api/app.py` — loading `CellposeModel` directly in the async lifespan coroutine blocked the event loop for 60–90 s; all liveness/readiness probe requests timed out silently and Kubernetes killed the pod in an infinite restart loop. Fix: `await loop.run_in_executor(None, ...)` loads the model in a background thread so uvicorn keeps serving HTTP requests (returning `/health → 503`) during the entire load window (`model-dev`)
+- `helm-chart/templates/deployment.yaml` — readiness `failureThreshold` raised from 6 → 12 (2 min of 503s tolerated after initial delay); liveness `initialDelaySeconds` raised from 30 → 120, `periodSeconds` 20 → 30, `timeoutSeconds: 5` added — liveness can no longer fire and kill the pod while the model is still loading (`model-dev`)
+- `docker-compose.yml` — `start_period` 30 s → 90 s, `retries` 5 → 15, `interval` 15 s → 10 s, added `--max-time 5` to `curl` health check command so the health check properly waits for the model to finish loading before Docker Compose starts the app container (`model-dev`)
+
 ### Added
 - `README.md` — project overview, quick start, usage guide, API reference, configuration, project structure, development guide, roadmap (`docs`)
 - `App_container/app.py` — full Gradio Blocks UI: image upload, diameter/flow/cellprob sliders, `segment()` callback via `httpx`, colored overlay rendering (tab20 colormap, alpha 0.55), cell count summary, per-cell stats table (Cell ID, area px, area %), size distribution histogram, overlay PNG + `masks.npy` download buttons (`gradio-dev`)
