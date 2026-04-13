@@ -126,6 +126,8 @@ async def segment(
     # Run MODEL.eval() in a thread-pool executor so the async event loop stays
     # free to handle /health probes while inference runs (30–120 s on large images).
     # Without this, the event loop is blocked and /health times out → liveness kills the pod.
+    # Explicitly pass channel_axis to avoid the `channels` deprecation warning in Cellpose v4.
+    channel_axis = None if img.ndim == 2 else 2
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
@@ -135,6 +137,7 @@ async def segment(
                 diameter=diameter,
                 flow_threshold=flow_threshold,
                 cellprob_threshold=cellprob_threshold,
+                channel_axis=channel_axis,
             ),
         )
     except Exception as e:

@@ -11,8 +11,20 @@ from PIL import Image
 
 MODEL_URL = os.getenv("MODEL_URL", "http://model:8000/segment")
 
+# Tracks temp files from the previous call so they can be deleted at the start
+# of the next call (after Gradio has already served them to the browser).
+_pending_cleanup: list[str] = []
+
 
 def segment(image, diameter, flow_threshold, cellprob_threshold):
+    global _pending_cleanup
+    # Clean up temp files written by the previous invocation.
+    for _p in _pending_cleanup:
+        try:
+            os.unlink(_p)
+        except OSError:
+            pass
+    _pending_cleanup.clear()
     """Upload image to Model Container, return overlay + stats."""
     if image is None:
         raise gr.Error("Please upload an image first.")
@@ -36,13 +48,13 @@ def segment(image, diameter, flow_threshold, cellprob_threshold):
             MODEL_URL,
             files={"image": ("image.png", buf.getvalue(), "image/png")},
             data=form_data,
-            timeout=120.0,
+            timeout=300.0,
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as e:
         raise gr.Error(f"Segmentation failed (HTTP {e.response.status_code}): {e.response.text}")
     except httpx.TimeoutException:
-        raise gr.Error("Request timed out. The model may still be loading — please wait 30 seconds and try again.")
+        raise gr.Error("Segmentation timed out — try a smaller image or reduce the image resolution.")
     except httpx.RequestError as e:
         raise gr.Error(f"Cannot reach model container ({type(e).__name__}). It may still be starting — please wait 30 seconds and retry.")
 
@@ -116,6 +128,9 @@ def segment(image, diameter, flow_threshold, cellprob_threshold):
     masks_tmp.close()
     np.save(masks_path, masks)
 
+    # Track for cleanup on the next call.
+    _pending_cleanup.extend([overlay_path, masks_path])
+
     return overlay_path, summary, stats_rows, fig, overlay_path, masks_path
 
 
@@ -150,4 +165,5 @@ with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
         outputs=[overlay_output, summary_box, stats_table, histogram, overlay_file, masks_file],
     )
 
+demo.queue()
 demo.launch(server_name="0.0.0.0", server_port=8001)
