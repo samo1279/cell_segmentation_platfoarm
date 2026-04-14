@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
 
+# Limit to one concurrent MODEL.eval() call.
+# Running multiple heavy inference jobs in parallel on the same CPU cores
+# causes memory-bandwidth thrashing and makes every request slower.
+# Requests queue here instead of competing; health probes are unaffected
+# because /health is a lightweight async function on the event loop.
+_INFER_SEM = asyncio.Semaphore(1)
+
 # Model is loaded during startup so uvicorn binds port 8000 immediately.
 # /health returns 503 until loading completes; the readiness probe waits for 200.
 MODEL = None
@@ -130,16 +137,17 @@ async def segment(
     channel_axis = None if img.ndim == 2 else 2
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: MODEL.eval(
-                img,
-                diameter=diameter,
-                flow_threshold=flow_threshold,
-                cellprob_threshold=cellprob_threshold,
-                channel_axis=channel_axis,
-            ),
-        )
+        async with _INFER_SEM:
+            result = await loop.run_in_executor(
+                None,
+                lambda: MODEL.eval(
+                    img,
+                    diameter=diameter,
+                    flow_threshold=flow_threshold,
+                    cellprob_threshold=cellprob_threshold,
+                    channel_axis=channel_axis,
+                ),
+            )
     except Exception as e:
         logger.error(f"Segmentation error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(e)}")
