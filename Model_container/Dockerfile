@@ -19,4 +19,7 @@ COPY cellpose_api/app.py .
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# --timeout-keep-alive 620: keep the TCP connection alive for 620 s so it
+# outlasts the 900 s read timeout in the Gradio app minus connection overhead.
+# Without this, uvicorn's default 5 s keep-alive drops idle connections mid-inference.
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "620"]

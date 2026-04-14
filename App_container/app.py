@@ -43,18 +43,22 @@ def segment(image, diameter, flow_threshold, cellprob_threshold):
     if diameter > 0:
         form_data["diameter"] = diameter
 
+    # cpsam uses a ViT-H backbone; on CPU-only nodes inference can take
+    # 5-15 minutes for real microscopy images.  Use per-phase timeouts so
+    # the long wait is only on the read phase, not on connect/write.
+    _timeout = httpx.Timeout(connect=10.0, write=60.0, read=900.0, pool=10.0)
     try:
         resp = httpx.post(
             MODEL_URL,
             files={"image": ("image.png", buf.getvalue(), "image/png")},
             data=form_data,
-            timeout=300.0,
+            timeout=_timeout,
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as e:
         raise gr.Error(f"Segmentation failed (HTTP {e.response.status_code}): {e.response.text}")
     except httpx.TimeoutException:
-        raise gr.Error("Segmentation timed out — try a smaller image or reduce the image resolution.")
+        raise gr.Error("Segmentation timed out after 15 minutes. The model is running on CPU — try enabling GPU or switching to the cyto3 model.")
     except httpx.RequestError as e:
         raise gr.Error(f"Cannot reach model container ({type(e).__name__}). It may still be starting — please wait 30 seconds and retry.")
 

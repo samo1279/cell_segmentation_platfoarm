@@ -8,7 +8,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 - `Model_container/cellpose_api/app.py` — added `asyncio.Semaphore(1)` (`_INFER_SEM`) around `MODEL.eval()` to serialize concurrent inference requests. Without this, parallel `POST /segment` calls compete for the same CPU cores, causing memory-bandwidth thrashing that makes every request slower and more likely to timeout.
-- `.gitlab-ci.yml` — increased segment smoke-test timeout from 120 s → 600 s. `cpsam` runs a ViT-H backbone; even a 64×64 image can take several minutes on CPU-only nodes. The previous 120 s limit caused the verify job to report a failure even when the model was working correctly (the prior job succeeded because the command was guarded with `|| true`).
+- `.gitlab-ci.yml` — increased segment smoke-test timeout from 120 s → 600 s. `cpsam` runs a ViT-H backbone; even a 64×64 image can take several minutes on CPU-only nodes.
+- `App_container/app.py` — replaced `timeout=300.0` (uniform 5-minute timeout) with `httpx.Timeout(connect=10, write=60, read=900, pool=10)`. The uniform timeout was hitting the read phase during long CPU-only cpsam inference (5–15 min for microscopy images), causing "Segmentation timed out" even though the model was still running and would eventually complete.
+- `Model_container/Dockerfile` — added `--timeout-keep-alive 620` to the uvicorn CMD. Uvicorn's default 5 s keep-alive was closing the idle TCP connection mid-inference, before the 900 s read timeout in the Gradio app could elapse.
 
 ### Fixed (continued)
 - `helm-chart/templates/deployment.yaml` — replaced brittle `initialDelaySeconds` hack with a proper K8s `startupProbe` (30 × 10 s = up to 5 min grace). While the startupProbe is pending, Kubernetes fully disables the liveness probe — the pod **cannot** be killed during model loading. readinessProbe and livenessProbe now have no `initialDelaySeconds`; they only begin after the startupProbe succeeds (`model-dev`)
