@@ -90,11 +90,11 @@ def segment(image, diameter, flow_threshold, cellprob_threshold):
     for label_id in labels:
         area_px = int(np.sum(masks == label_id))
         areas.append(area_px)
-        stats_rows.append({
-            "Cell ID": int(label_id),
-            "Area (px)": area_px,
-            "Area (%)": round(area_px / total_pixels * 100, 3),
-        })
+        stats_rows.append([
+            int(label_id),
+            area_px,
+            round(area_px / total_pixels * 100, 3),
+        ])
 
     # --- Summary ---
     areas_arr = np.array(areas) if areas else np.array([0])
@@ -156,7 +156,12 @@ with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
             summary_box = gr.Textbox(label="Summary", lines=3)
 
     with gr.Row():
-        stats_table = gr.Dataframe(label="Per-cell statistics", headers=["Cell ID", "Area (px)", "Area (%)"])
+        stats_table = gr.Dataframe(
+            label="Per-cell statistics",
+            headers=["Cell ID", "Area (px)", "Area (%)"],
+            datatype=["number", "number", "number"],
+            col_count=(3, "fixed"),
+        )
         histogram = gr.Plot(label="Size distribution")
 
     with gr.Row():
