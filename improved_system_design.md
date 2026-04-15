@@ -378,6 +378,81 @@ services:
 | Architecture | Synchronous call | POC scope, no need for async queue for single-user use |
 | Model Container | Unchanged from existing | Already works, just hide behind internal network |
 | No database | Stateless | Results are ephemeral; user downloads what they need |
+
+---
+
+## GPU Acceleration
+
+### Why GPU matters
+
+The default model (`cpsam`) uses a ViT-H backbone. On CPU-only hardware inference takes **5–15 minutes** per microscopy image. With an NVIDIA GPU the same inference runs in **10–30 seconds** — a 20–50× speedup.
+
+### How it works (code path already in place)
+
+```
+Model_container/cellpose_api/app.py
+  └─ USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
+  └─ models.CellposeModel(gpu=USE_GPU, ...)   # passes flag straight to Cellpose/PyTorch
+```
+
+The `USE_GPU` environment variable is the single switch. Everything else is automatic.
+
+### Build-time flag: `USE_CUDA`
+
+`Model_container/Dockerfile` accepts a build argument `USE_CUDA`:
+
+| `USE_CUDA` | PyTorch installed | Required host hardware |
+|---|---|---|
+| `false` (default) | CPU wheel from PyPI | Any machine — works on macOS |
+| `true` | CUDA 12.1 wheel from download.pytorch.org/whl/cu121 | Linux + NVIDIA driver ≥ 525 |
+
+The CUDA wheels bundle all required CUDA shared libraries; no special base image is needed.
+
+### Deploying with GPU
+
+Use `docker-compose.gpu.yml` as an override on a Linux machine with an NVIDIA GPU:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+**Host prerequisites (one-time):**
+
+```bash
+# 1. Verify NVIDIA driver
+nvidia-smi
+
+# 2. Install nvidia-container-toolkit (Ubuntu/Debian)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-ct.gpg
+curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed "s#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-ct.gpg] https://#g" \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+
+# 3. Smoke-test GPU passthrough
+docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+```
+
+### Confirming GPU is active at runtime
+
+```bash
+# /health now reports the live gpu flag
+curl http://localhost:8000/health
+# → {"ok": true, "model": "cpsam", "gpu": true}
+```
+
+Any log line from the model container on startup also prints:
+
+```
+Loading Cellpose model (gpu=True)...
+```
+
+### Architecture impact
+
+No new services are introduced. The two-container boundary is unchanged. GPU acceleration is purely an infrastructure concern confined to the Model Container.
 | No Nginx | Gradio serves directly | Single user, no TLS/rate limiting needed for POC |
 
 ---

@@ -4,7 +4,20 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — GPU Acceleration Support
+
+### Added
+- `docker-compose.gpu.yml` — Docker Compose override for Linux/NVIDIA GPU deployments. Sets `USE_CUDA=true` build arg, `USE_GPU=true` env var, and reserves all NVIDIA GPUs via `deploy.resources.reservations.devices`. Memory limit raised to 8 G for cpsam + activations.
+- `Model_container/Dockerfile` — `ARG USE_CUDA=false` build argument. When `USE_CUDA=true`, installs PyTorch CUDA 12.1 wheels (`download.pytorch.org/whl/cu121`) before `requirements.txt` so cellpose picks up the CUDA-enabled torch. CPU build (default) is unchanged and works on macOS.
+- `improved_system_design.md` — "GPU Acceleration" section documenting the `USE_GPU` code path, `USE_CUDA` build arg, host prerequisites (nvidia-container-toolkit), runtime verification command, and architecture impact.
+
+### Changed
+- Nothing in the API contract or two-container architecture.
+
+---
+
 ## [Unreleased] — Phase 1 Complete (POC v1 Foundation)
+
 
 ### Fixed
 - `Model_container/cellpose_api/app.py` — added `asyncio.Semaphore(1)` (`_INFER_SEM`) around `MODEL.eval()` to serialize concurrent inference requests. Without this, parallel `POST /segment` calls compete for the same CPU cores, causing memory-bandwidth thrashing that makes every request slower and more likely to timeout.

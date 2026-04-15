@@ -1,5 +1,12 @@
 FROM python:3.11-slim
 
+# Set USE_CUDA=true at build time to install CUDA-enabled PyTorch wheels.
+# CPU build is the default so the image builds on any machine (including macOS).
+# GPU build targets CUDA 12.1; the NVIDIA driver on the host satisfies the
+# remaining runtime dependency — no CUDA base image is required because the
+# PyTorch whl bundles all necessary CUDA shared libraries.
+ARG USE_CUDA=false
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     build-essential \
@@ -7,6 +14,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements.txt .
+
+# Install PyTorch first so cellpose picks up the right build.
+# When USE_CUDA=true this installs the cu121 wheel (CUDA 12.1 bundled).
+# When USE_CUDA=false (default) pip falls through to the CPU wheel from PyPI.
+RUN if [ "$USE_CUDA" = "true" ]; then \
+      pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121; \
+    fi
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download cpsam model weights so they are baked into the image.
