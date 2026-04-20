@@ -20,8 +20,11 @@ model:
     tag: latest
     pullPolicy: IfNotPresent
   port: 8000
-  # Set to true only if the cluster has the NVIDIA device plugin enabled (microk8s enable gpu)
-  useGpu: false
+  # Set to true when the cluster has the NVIDIA device plugin enabled (microk8s enable gpu).
+  # Requires USE_CUDA=true build-arg in CI so the image contains CUDA PyTorch.
+  useGpu: true
+  # Number of GPUs to allocate per pod (nvidia.com/gpu resource limit).
+  gpuCount: 1
   resources:
     requests:
       cpu: 500m

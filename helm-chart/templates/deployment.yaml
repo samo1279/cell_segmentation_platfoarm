@@ -56,8 +56,20 @@ spec:
       labels:
         app: {{ .Release.Name }}-model
     spec:
+      # Schedule on a GPU node when useGpu=true.
+      # MicroK8s with 'microk8s enable gpu' labels GPU nodes with nvidia.com/gpu.present=true.
+      # When useGpu=false the pod runs on the management node (CPU-only).
+      {{- if .Values.model.useGpu }}
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      {{- else }}
       nodeSelector:
         role: management
+      {{- end }}
       containers:
         - name: cellpose
           image: "{{ .Values.model.image.repository }}:{{ .Values.model.image.tag }}"
@@ -71,7 +83,21 @@ spec:
             - name: USE_GPU
               value: {{ .Values.model.useGpu | quote }}
           resources:
-            {{- toYaml .Values.model.resources | nindent 12 }}
+            requests:
+              cpu: {{ .Values.model.resources.requests.cpu }}
+              memory: {{ .Values.model.resources.requests.memory }}
+              {{- if .Values.model.useGpu }}
+              nvidia.com/gpu: {{ .Values.model.gpuCount | quote }}
+              {{- end }}
+            limits:
+              cpu: {{ .Values.model.resources.limits.cpu }}
+              memory: {{ .Values.model.resources.limits.memory }}
+              {{- if .Values.model.useGpu }}
+              # nvidia.com/gpu MUST be in limits for the NVIDIA device plugin to
+              # allocate a GPU to the pod. Without this, torch.cuda.is_available()
+              # returns False even when USE_GPU=true and CUDA torch is installed.
+              nvidia.com/gpu: {{ .Values.model.gpuCount | quote }}
+              {{- end }}
           # startupProbe gates liveness entirely until /health returns 200.
           # This is the correct K8s pattern for slow-starting containers.
           # 30 attempts × 10 s = up to 300 s (5 min) for model to become ready.
