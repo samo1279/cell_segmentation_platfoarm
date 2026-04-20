@@ -3,3 +3,4 @@ httpx
 numpy
 Pillow
 matplotlib
+pandas

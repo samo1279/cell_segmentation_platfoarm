@@ -1,0 +1,5 @@
+# Integration test dependencies — NOT used in CI.
+# Install manually: pip install -r tests/requirements-integration.txt
+httpx
+numpy
+Pillow

@@ -4,6 +4,34 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 2A + Phase 2C: Batch Processing & UX Improvements (2026-04-20)
+
+### Added
+- `App_container/app.py` — **Batch tab** (`gr.Tab("Batch")`): multi-file upload via `gr.File(file_count="multiple", file_types=["image"])`, same 3 sliders + model radio as Single tab, "Run Batch" button.
+- `App_container/app.py` — `batch_segment()` function: loops over uploaded files, calls `_call_model()` per image with `gr.Progress` reporting, collects per-image results.
+- `App_container/app.py` — Batch summary `gr.Dataframe` with columns: Filename, Model, Cell count, Mean area (px), Time (s).
+- `App_container/app.py` — ZIP download (`gr.File`) in Batch tab — packages all overlay PNGs under `overlays/` and all masks `.npy` files under `masks/` inside the ZIP.
+- `App_container/app.py` — **Overlay Opacity slider** (`gr.Slider(0.1, 1.0, value=0.55)`) in both Single Image and Batch tabs; wired into `_render_overlay()` (previously hardcoded as `0.55`).
+- `App_container/app.py` — **Download Statistics (CSV)** button in Single Image tab; triggers `export_csv()` which calls `pandas.DataFrame.to_csv()` and returns a temp file.
+- `App_container/app.py` — Shared helper functions extracted: `_encode_png()`, `_call_model()`, `_render_overlay()`, `_compute_stats()` — removes code duplication between single and batch paths.
+- `App_container/requirements.txt` — Added `pandas` (explicit, was previously a transitive dep of Gradio; now required directly by `export_csv()`).
+
+### Changed
+- `App_container/app.py` — `segment()` signature gains `opacity` parameter (replaces hardcoded `0.55`).
+- `App_container/app.py` — `submit_btn.click()` inputs list updated to include `opacity_slider`.
+- `App_container/app.py` — UI wrapped in `gr.Tabs()` with "Single Image" and "Batch" tabs.
+- `App_container/app.py` — `_pending_batch_cleanup` global tracks batch temp files for deferred deletion (mirrors existing `_pending_cleanup` pattern for single-image path).
+
+---
+
+## [Unreleased] — Manual Integration Test Script (2026-04-20)
+
+### Added
+- `tests/integration_test.py` — Manual end-to-end integration test script. Verifies: `GET /health` returns `ok: true`; Gradio UI reachable at `http://localhost:8001`; `POST /segment` with `001_img.png` using both `cyto3` and `cpsam` returns HTTP 200, valid `.npy` masks, non-zero cell count, and `X-Model-Used` header. Prints a per-model summary table (image, model, cell count, elapsed time). Configurable via `MODEL_URL`, `APP_URL`, `IMAGE_PATH`, `TIMEOUT` env vars. Designed to run inside the Docker network via `docker compose exec app python /tests/integration_test.py`.
+- `tests/requirements-integration.txt` — Pinned dependencies for the integration test (`httpx`, `numpy`, `Pillow`). **Not wired into CI** — install manually with `pip install -r tests/requirements-integration.txt`.
+
+---
+
 ## [Unreleased] — Fix TestClient lifespan compatibility (2026-04-20)
 
 ### Fixed
