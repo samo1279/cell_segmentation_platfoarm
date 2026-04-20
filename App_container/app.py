@@ -64,6 +64,8 @@ def segment(image, diameter, flow_threshold, cellprob_threshold, model_type):
         raise gr.Error(f"Cannot reach model container ({type(e).__name__}). It may still be starting — please wait 30 seconds and retry.")
 
     # Parse masks
+    # Read which model the server actually used (confirmed server-side, not just what we sent)
+    active_model = resp.headers.get("x-model-used", model_type)
     masks = np.load(io.BytesIO(resp.content))
     labels = np.unique(masks)
     labels = labels[labels != 0]  # exclude background
@@ -100,7 +102,7 @@ def segment(image, diameter, flow_threshold, cellprob_threshold, model_type):
     # --- Summary ---
     areas_arr = np.array(areas) if areas else np.array([0])
     summary = (
-        f"{cell_count} cells detected\n"
+        f"Model: {active_model} | {cell_count} cells detected\n"
         f"Mean area: {areas_arr.mean():.0f} px | "
         f"Median: {np.median(areas_arr):.0f} px | "
         f"Std: {areas_arr.std():.0f} px\n"
@@ -141,7 +143,7 @@ def segment(image, diameter, flow_threshold, cellprob_threshold, model_type):
 
 # --- Gradio UI ---
 with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
-    gr.Markdown("# Cell Segmentation (Cellpose cyto3)")
+    gr.Markdown("# Cell Segmentation (Cellpose)")
     gr.Markdown("Upload a microscopy image, adjust parameters, and get segmentation results.")
 
     with gr.Row():

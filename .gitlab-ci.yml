@@ -1,4 +1,5 @@
 stages:
+  - test
   - build
   - deploy
   - verify
@@ -14,6 +15,28 @@ variables:
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
   APP_DOMAIN: "${APP_NAME}.g007.imec.local"
 
+# ── Unit tests — run before building images to catch code issues early ────────
+unit-test-model:
+  stage: test
+  image: python:3.11-slim
+  tags:
+    - a40gpu
+  script:
+    # Install lightweight test deps — NO cellpose/torch (stubbed in tests).
+    - pip install --no-cache-dir -r Model_container/tests/requirements-test.txt
+    # PYTHONPATH points pytest at the FastAPI app module (app.py).
+    - PYTHONPATH=${CI_PROJECT_DIR}/Model_container/cellpose_api
+      pytest Model_container/tests/
+        --junit-xml=junit-model.xml
+        -v
+  artifacts:
+    when: always           # upload even when tests fail so GitLab shows failures
+    reports:
+      junit: junit-model.xml
+    paths:
+      - junit-model.xml    # also browsable via Artifacts tab
+    expire_in: 30 days
+
 # Build the Gradio App Container image
 build-app:
   stage: build
@@ -22,6 +45,7 @@ build-app:
     entrypoint: [""]
   tags:
     - a40gpu
+  needs: [unit-test-model]
   script:
     - /kaniko/executor
       --context "${CI_PROJECT_DIR}/App_container"
@@ -37,6 +61,7 @@ build-model:
     entrypoint: [""]
   tags:
     - a40gpu
+  needs: [unit-test-model]
   script:
     - /kaniko/executor
       --context "${CI_PROJECT_DIR}/Model_container"

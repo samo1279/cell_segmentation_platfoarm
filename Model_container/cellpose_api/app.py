@@ -189,6 +189,10 @@ async def segment(
     return Response(
         content=buf.getvalue(),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": "attachment; filename=masks.npy"},
+        headers={
+            "Content-Disposition": "attachment; filename=masks.npy",
+            # Echoes back which model actually ran so the client can confirm routing.
+            "X-Model-Used": model_type,
+        },
     )
    
