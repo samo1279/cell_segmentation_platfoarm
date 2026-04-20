@@ -34,13 +34,8 @@ RUN if [ "$USE_CUDA" = "true" ]; then \
 # same cached weights by name and moves them to the correct device — the weight
 # cache key is model name only and is device-independent.
 # cyto3: U-Net backbone, fast. cpsam: ViT-H transformer, best accuracy.
-RUN python -c "
-from cellpose import models
-models.CellposeModel(gpu=False, pretrained_model='cyto3')
-print('cyto3 weights downloaded')
-models.CellposeModel(gpu=False, pretrained_model='cpsam')
-print('cpsam weights downloaded')
-"
+# Single-line form avoids Kaniko misreading 'from cellpose import models' as a FROM instruction.
+RUN python -c "from cellpose import models; models.CellposeModel(gpu=False, pretrained_model='cyto3'); print('cyto3 weights downloaded'); models.CellposeModel(gpu=False, pretrained_model='cpsam'); print('cpsam weights downloaded')"
 
 COPY cellpose_api/app.py .
 
