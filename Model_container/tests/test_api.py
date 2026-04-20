@@ -78,14 +78,12 @@ def _make_png(width: int = 64, height: int = 64, grayscale: bool = False) -> byt
 
 @pytest.fixture()
 def client(monkeypatch):
-    """TestClient with lifespan disabled; MODELS pre-populated with fake models."""
+    """TestClient without context manager — lifespan never runs, no real Cellpose called."""
     fake = _FakeModel()
     monkeypatch.setitem(model_app.MODELS, "cyto3", fake)
     monkeypatch.setitem(model_app.MODELS, "cpsam", fake)
     monkeypatch.setattr(model_app, "MODEL", fake)
-    # lifespan="off" skips the startup coroutine so we never call real Cellpose.
-    with TestClient(model_app.app, lifespan="off") as c:
-        yield c
+    yield TestClient(model_app.app)
 
 
 # ---------------------------------------------------------------------------
@@ -114,23 +112,23 @@ class TestHealth:
     def test_loading_returns_503_when_models_none(self, monkeypatch):
         monkeypatch.setitem(model_app.MODELS, "cyto3", None)
         monkeypatch.setitem(model_app.MODELS, "cpsam", None)
-        with TestClient(model_app.app, lifespan="off") as c:
-            r = c.get("/health")
+        c = TestClient(model_app.app)
+        r = c.get("/health")
         assert r.status_code == 503
 
     def test_loading_body_ok_false(self, monkeypatch):
         monkeypatch.setitem(model_app.MODELS, "cyto3", None)
         monkeypatch.setitem(model_app.MODELS, "cpsam", None)
-        with TestClient(model_app.app, lifespan="off") as c:
-            body = c.get("/health").json()
+        c = TestClient(model_app.app)
+        body = c.get("/health").json()
         assert body["ok"] is False
 
     def test_partial_load_returns_503(self, monkeypatch):
         """If only one of the two models is loaded, health must be 503."""
         monkeypatch.setitem(model_app.MODELS, "cyto3", _FakeModel())
         monkeypatch.setitem(model_app.MODELS, "cpsam", None)
-        with TestClient(model_app.app, lifespan="off") as c:
-            r = c.get("/health")
+        c = TestClient(model_app.app)
+        r = c.get("/health")
         assert r.status_code == 503
 
 
@@ -207,12 +205,12 @@ class TestSegmentValidation:
     def test_model_still_loading_returns_503(self, monkeypatch):
         monkeypatch.setitem(model_app.MODELS, "cyto3", None)
         monkeypatch.setitem(model_app.MODELS, "cpsam", _FakeModel())
-        with TestClient(model_app.app, lifespan="off") as c:
-            r = c.post(
-                "/segment",
-                files={"image": ("img.png", _make_png(), "image/png")},
-                data={"model_type": "cyto3"},
-            )
+        c = TestClient(model_app.app)
+        r = c.post(
+            "/segment",
+            files={"image": ("img.png", _make_png(), "image/png")},
+            data={"model_type": "cyto3"},
+        )
         assert r.status_code == 503
 
 

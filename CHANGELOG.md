@@ -4,6 +4,11 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Fix TestClient lifespan compatibility (2026-04-20)
+
+### Fixed
+- `Model_container/tests/test_api.py` — Removed `lifespan="off"` from all `TestClient` instantiations; this kwarg was added in starlette 0.26+ and was absent in the CI image. Without a context manager, `TestClient` never triggers lifespan startup, achieving the same effect.
+
 ## [Unreleased] — Model Selector UI (2026-04-20)
 
 ### Added
