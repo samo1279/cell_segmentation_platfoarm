@@ -23,23 +23,35 @@ _INFER_SEM = asyncio.Semaphore(1)
 
 # Model is loaded during startup so uvicorn binds port 8000 immediately.
 # /health returns 503 until loading completes; the readiness probe waits for 200.
-MODEL = None
+MODEL = None  # kept for backward compatibility
+MODELS: dict[str, object] = {"cyto3": None, "cpsam": None}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the model in a thread-pool executor so the event loop stays
-    unblocked during the 30-90 s load.  /health returns 503 until done,
-    allowing readiness probes to report not-ready without killing the pod."""
-    global MODEL
-    logger.info(f"Loading Cellpose model (gpu={USE_GPU})...")
+    """Load both models in parallel using thread-pool executors so the event
+    loop stays unblocked during the 30-90 s load.  /health returns 503 until
+    both are ready, allowing readiness probes to report not-ready without
+    killing the pod."""
+    global MODEL, MODELS
+    logger.info(f"Loading Cellpose models (gpu={USE_GPU})...")
     loop = asyncio.get_event_loop()
-    MODEL = await loop.run_in_executor(
-        None,
-        lambda: models.CellposeModel(gpu=USE_GPU, pretrained_model="cpsam"),
+
+    def _load(name: str):
+        m = models.CellposeModel(gpu=USE_GPU, pretrained_model=name)
+        logger.info(f"Model '{name}' loaded successfully")
+        return m
+
+    cyto3_model, cpsam_model = await asyncio.gather(
+        loop.run_in_executor(None, lambda: _load("cyto3")),
+        loop.run_in_executor(None, lambda: _load("cpsam")),
     )
-    logger.info("Model loaded successfully")
+    MODELS["cyto3"] = cyto3_model
+    MODELS["cpsam"] = cpsam_model
+    MODEL = MODELS["cyto3"]  # backward-compat alias
     yield
+    MODELS["cyto3"] = None
+    MODELS["cpsam"] = None
     MODEL = None
 
 
@@ -55,14 +67,21 @@ ALLOWED_EXTENSIONS = {".png", ".tiff", ".tif", ".jpeg", ".jpg"}
 async def health():
     # async def runs directly on the event loop — never queued in the thread pool.
     # This guarantees /health responds instantly even while MODEL.eval() is running.
-    if MODEL is None:
-        return JSONResponse(status_code=503, content={"ok": False, "status": "loading"})
-    return {"ok": True, "model": "cpsam", "gpu": USE_GPU}
+    loaded = {name: (m is not None) for name, m in MODELS.items()}
+    if not all(loaded.values()):
+        return JSONResponse(status_code=503, content={"ok": False, "status": "loading", "models": loaded})
+    return {"ok": True, "models": loaded, "gpu": USE_GPU}
 
 
 @app.get("/parameters")
 def parameters():
     return {
+        "model_type": {
+            "type": "string",
+            "default": "cyto3",
+            "options": ["cyto3", "cpsam"],
+            "description": "cyto3: U-Net backbone, fast (5-30s on GPU). cpsam: ViT-H transformer, slow (2-20 min on GPU), best accuracy.",
+        },
         "diameter": {
             "type": "float",
             "default": None,
@@ -90,11 +109,18 @@ def parameters():
 @app.post("/segment")
 async def segment(
     image: UploadFile = File(...),
+    model_type: str = Form(default="cyto3"),
     diameter: float | None = Form(default=None),
     flow_threshold: float = Form(default=0.4),
     cellprob_threshold: float = Form(default=0.0),
 ):
-    if MODEL is None:
+    if model_type not in MODELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid model_type '{model_type}'. Must be one of: {list(MODELS.keys())}.",
+        )
+    selected_model = MODELS[model_type]
+    if selected_model is None:
         raise HTTPException(status_code=503, detail="Model is still loading, please retry in a few seconds.")
 
     # --- Input validation ---
@@ -128,9 +154,10 @@ async def segment(
             )
 
     logger.info(f"Processing image: {image.filename}, shape={img.shape}")
+    logger.info(f"Using model: {model_type}")
 
     # --- Segmentation ---
-    # Run MODEL.eval() in a thread-pool executor so the async event loop stays
+    # Run model.eval() in a thread-pool executor so the async event loop stays
     # free to handle /health probes while inference runs (30–120 s on large images).
     # Without this, the event loop is blocked and /health times out → liveness kills the pod.
     # Explicitly pass channel_axis to avoid the `channels` deprecation warning in Cellpose v4.
@@ -140,7 +167,7 @@ async def segment(
         async with _INFER_SEM:
             result = await loop.run_in_executor(
                 None,
-                lambda: MODEL.eval(
+                lambda: selected_model.eval(
                     img,
                     diameter=diameter,
                     flow_threshold=flow_threshold,

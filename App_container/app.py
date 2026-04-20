@@ -16,7 +16,7 @@ MODEL_URL = os.getenv("MODEL_URL", "http://model:8000/segment")
 _pending_cleanup: list[str] = []
 
 
-def segment(image, diameter, flow_threshold, cellprob_threshold):
+def segment(image, diameter, flow_threshold, cellprob_threshold, model_type):
     global _pending_cleanup
     # Clean up temp files written by the previous invocation.
     for _p in _pending_cleanup:
@@ -39,6 +39,7 @@ def segment(image, diameter, flow_threshold, cellprob_threshold):
     form_data = {
         "flow_threshold": flow_threshold,
         "cellprob_threshold": cellprob_threshold,
+        "model_type": model_type,
     }
     if diameter > 0:
         form_data["diameter"] = diameter
@@ -149,6 +150,17 @@ with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
             diameter = gr.Slider(0, 200, value=30, step=1, label="Diameter (0 = auto)")
             flow_thresh = gr.Slider(0, 1, value=0.4, step=0.05, label="Flow threshold")
             cellprob_thresh = gr.Slider(-6, 6, value=0.0, step=0.5, label="Cell probability threshold")
+            model_choice = gr.Radio(
+                choices=["cyto3", "cpsam"],
+                value="cyto3",
+                label="Model",
+                info=(
+                    "cyto3 — U-Net backbone. Fast: 5–30s on GPU, 2–10 min on CPU. "
+                    "Good accuracy for most microscopy images.\n"
+                    "cpsam — ViT-H (SAM) backbone. Slow: 2–20 min on GPU. "
+                    "Best accuracy for difficult or low-contrast images."
+                ),
+            )
             submit_btn = gr.Button("Segment", variant="primary")
 
         with gr.Column(scale=2):
@@ -170,7 +182,7 @@ with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
 
     submit_btn.click(
         fn=segment,
-        inputs=[img_input, diameter, flow_thresh, cellprob_thresh],
+        inputs=[img_input, diameter, flow_thresh, cellprob_thresh, model_choice],
         outputs=[overlay_output, summary_box, stats_table, histogram, overlay_file, masks_file],
     )
 

@@ -4,6 +4,32 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Model Selector UI (2026-04-20)
+
+### Added
+- `App_container/app.py` — `gr.Radio` widget (`choices=["cyto3", "cpsam"]`, default `"cyto3"`) inserted in the left column below the `cellprob_thresh` slider, with an `info` string describing each model's speed/accuracy trade-off.
+
+### Changed
+- `App_container/app.py` — `segment()` signature extended with `model_type` parameter.
+- `App_container/app.py` — `"model_type"` key added to the `form_data` dict posted to `POST /segment`.
+- `App_container/app.py` — `submit_btn.click()` inputs list updated to include `model_choice`.
+
+---
+
+## [Unreleased] — Dual-Model Selection (2026-04-20)
+
+### Added
+- `Model_container/cellpose_api/app.py` — `MODELS` dict (`{"cyto3": None, "cpsam": None}`) at module level; both models loaded in parallel at startup via `asyncio.gather` + `loop.run_in_executor`. `MODEL` kept as a backward-compat alias pointing to `cyto3`.
+- `Model_container/cellpose_api/app.py` — `POST /segment` now accepts `model_type: str = Form(default="cyto3")`. Validated against `MODELS` keys; returns 422 for unknown values. Logs the selected model before inference.
+- `Model_container/cellpose_api/app.py` — `GET /parameters` response now includes a `model_type` field with `options: ["cyto3", "cpsam"]` and descriptions of each model's speed/accuracy trade-off.
+- `Model_container/Dockerfile` — Weight-baking step now pre-downloads **both** `cyto3` and `cpsam` weights so neither requires a network fetch at container startup.
+
+### Changed
+- `Model_container/cellpose_api/app.py` — `GET /health` now returns `{"ok": true, "models": {"cyto3": true, "cpsam": true}, "gpu": ...}` instead of a single `model` string. Returns 503 if **either** model is still `None`.
+- `Model_container/cellpose_api/app.py` — Inference path uses `MODELS[model_type].eval(...)` instead of the global `MODEL.eval(...)`.
+
+---
+
 ## [Unreleased] — GPU Fix (2026-04-20)
 
 ### Fixed
