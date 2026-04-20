@@ -1,0 +1,35 @@
+# CPU override — for macOS dev machines and CI environments without an NVIDIA GPU.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build
+#
+# This override:
+#   - Disables CUDA PyTorch installation at build time (USE_CUDA=false → CPU wheels only)
+#   - Tells Cellpose to use CPU at runtime (USE_GPU=false)
+#   - Clears the NVIDIA GPU device reservation so Docker does not require nvidia-container-toolkit
+#   - Lowers the memory limit to 4G (no CUDA activation memory needed)
+#
+# NOTE: Inference on CPU is significantly slower (minutes per image for cpsam).
+#       Use docker-compose.gpu.yml on Linux servers with NVIDIA GPUs for fast inference.
+
+services:
+  model:
+    build:
+      context: ./Model_container
+      args:
+        # Installs CPU-only PyTorch wheels; keeps the image smaller (~2 GB smaller than CUDA).
+        USE_CUDA: "false"
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Tells CellposeModel(gpu=False) — must match USE_CUDA above.
+      - USE_GPU=false
+    deploy:
+      resources:
+        reservations:
+          # Empty list removes the NVIDIA device reservation from the base file.
+          # Docker Compose replaces list values on merge; this prevents
+          # "could not select device driver nvidia" on hosts without nvidia-container-toolkit.
+          devices: []
+        limits:
+          # No CUDA activations needed; 4G is sufficient for cpsam on CPU.
+          memory: 4G

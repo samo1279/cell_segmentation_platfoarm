@@ -4,6 +4,24 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — GPU Fix (2026-04-20)
+
+### Fixed
+- `Model_container/Dockerfile` — **critical bug**: CUDA torch was installed BEFORE `requirements.txt`, causing `pip install cellpose` to silently downgrade it back to the CPU wheel (cellpose lists `torch` as a PyPI dep, so pip overwrote the CUDA build). Fixed by installing `requirements.txt` first, then running `pip install --force-reinstall torch` with the CUDA index URL afterward. This guarantees the final torch in the image is always the CUDA-enabled version when `USE_CUDA=true`.
+- `Model_container/Dockerfile` — weight-baking `RUN` step now passes `gpu=False` explicitly to `CellposeModel(...)`. Previously the `gpu=` kwarg was omitted, relying on Cellpose's default. Made explicit to document that build-time initialization is always CPU-only (Docker build never has GPU access) and the weight cache key is device-independent — the same cached weights are found and moved to the correct device at runtime when `USE_GPU=true` is injected.
+- `docker-compose.yml` — `USE_GPU` was hardcoded to `false` and no build arg was passed, so the image was always built CPU-only and the model container was told to use CPU at runtime. Fixed: set `USE_GPU=true`, pass `USE_CUDA: "true"` build arg, add `deploy.resources.reservations.devices` NVIDIA GPU device reservation, raise memory limit to 8 G.
+
+### Changed
+- `docker-compose.yml` — GPU is now the default for `docker compose up --build` on any Linux server with an NVIDIA GPU + nvidia-container-toolkit. `docker-compose.gpu.yml` override is now redundant for standard deployments but kept for reference (it still provides `count: all` for multi-GPU hosts vs the single-GPU default in the base file).
+
+### Added
+- `docker-compose.cpu.yml` — new CPU override for macOS dev machines and GPU-less CI environments. Sets `USE_CUDA: "false"` build arg, `USE_GPU=false` env var, clears `deploy.resources.reservations.devices` to avoid requiring `nvidia-container-toolkit`, and lowers memory limit to 4G. Usage: `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build`.
+
+### Verified (healthcheck timings)
+- `docker-compose.yml` healthcheck (`start_period: 90s`, `interval: 10s`, `retries: 15`) confirmed sufficient for GPU mode. cpsam loads in ~30–60s on GPU, so `/health` returns OK well before `start_period` expires. Total window = 240s; no change required.
+
+---
+
 ## [Unreleased] — GPU Acceleration Support
 
 ### Added

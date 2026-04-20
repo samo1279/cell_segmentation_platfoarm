@@ -47,6 +47,56 @@ docker compose down
 
 ---
 
+## GPU Acceleration
+
+The Model Container runs the **cpsam** model (Cellpose SAM, ViT-H backbone). On CPU, segmentation takes **5–15 minutes per image** depending on resolution. On a CUDA-capable GPU, the same image segments in **10–30 seconds** — a 20–50× speedup. For interactive lab use, GPU is strongly recommended.
+
+### Host prerequisites (Ubuntu/Debian + NVIDIA GPU)
+
+1. Verify the NVIDIA driver is installed:
+   ```bash
+   nvidia-smi
+   ```
+2. Install nvidia-container-toolkit so Docker can access the GPU:
+   ```bash
+   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+   curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+   sudo apt-get update
+   sudo apt-get install -y nvidia-container-toolkit
+   sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+   ```
+3. Smoke-test GPU access inside Docker:
+   ```bash
+   docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+   ```
+
+### Running on GPU (default — Linux + NVIDIA)
+
+After completing the prerequisites above, the default compose file uses GPU:
+
+```bash
+docker compose up --build
+```
+
+### Running on CPU (macOS, no NVIDIA GPU)
+
+Override the default with the CPU compose file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build
+```
+
+### Verify GPU is active
+
+```bash
+curl http://localhost:8000/health
+# → {"ok": true, "model": "cpsam", "gpu": true}
+```
+
+`"gpu": false` means the model fell back to CPU (driver missing, toolkit not configured, or CPU override applied).
+
+---
+
 ## Usage
 
 1. **Upload image** — drag and drop a PNG, TIFF, or JPEG microscopy image (max 50 MB, max 8192×8192 px)

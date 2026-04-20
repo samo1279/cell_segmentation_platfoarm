@@ -15,19 +15,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 
-# Install PyTorch first so cellpose picks up the right build.
-# When USE_CUDA=true this installs the cu121 wheel (CUDA 12.1 bundled).
-# When USE_CUDA=false (default) pip falls through to the CPU wheel from PyPI.
-RUN if [ "$USE_CUDA" = "true" ]; then \
-      pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121; \
-    fi
-
+# Install all dependencies first (cellpose pulls in CPU torch as a transitive dep).
 RUN pip install --no-cache-dir -r requirements.txt
+
+# THEN forcibly reinstall torch with CUDA wheels so it overrides the CPU build
+# that cellpose's pip dependency resolver just installed.  Installing CUDA torch
+# BEFORE requirements.txt causes pip to downgrade it back to the CPU wheel when
+# it resolves cellpose's torch dependency — this is the root cause of GPU being
+# silently ignored even when USE_GPU=true.
+RUN if [ "$USE_CUDA" = "true" ]; then \
+      pip install --no-cache-dir --force-reinstall torch \
+        --index-url https://download.pytorch.org/whl/cu121; \
+    fi
 
 # Pre-download cpsam model weights so they are baked into the image.
 # Cellpose v4 renamed the default model from cyto3 → cpsam; using the exact
 # name ensures the baked cache key matches what runtime looks for.
-RUN python -c "from cellpose import models; models.CellposeModel(pretrained_model='cpsam'); print('cpsam weights downloaded')"
+# gpu=False is explicit: Docker build never has GPU access, so there is no
+# device to initialize on.  At runtime, CellposeModel(gpu=USE_GPU) finds the
+# same cached weights by name and moves them to the correct device — the weight
+# cache key is model name only and is device-independent.
+RUN python -c "from cellpose import models; models.CellposeModel(gpu=False, pretrained_model='cpsam'); print('cpsam weights downloaded')"
 
 COPY cellpose_api/app.py .
 

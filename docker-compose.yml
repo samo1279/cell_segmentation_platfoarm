@@ -15,12 +15,17 @@ services:
           memory: 1G
 
   model:
-    build: ./Model_container
+    build:
+      context: ./Model_container
+      args:
+        # Builds CUDA 12.1-enabled PyTorch into the image at build time.
+        USE_CUDA: "true"
     expose:
       - "8000"
     environment:
       - PYTHONUNBUFFERED=1
-      - USE_GPU=false
+      # Tells CellposeModel(gpu=True) — must match USE_CUDA above.
+      - USE_GPU=true
     healthcheck:
       test: ["CMD", "curl", "-f", "--max-time", "5", "http://localhost:8000/health"]
       interval: 10s
@@ -29,5 +34,11 @@ services:
       start_period: 90s
     deploy:
       resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
         limits:
-          memory: 4G
+          # cpsam ViT-H weights (~2 GB) + CUDA activations.
+          memory: 8G
