@@ -18,13 +18,14 @@ COPY requirements.txt .
 # Install all dependencies first (cellpose pulls in CPU torch as a transitive dep).
 RUN pip install --no-cache-dir -r requirements.txt
 
-# THEN forcibly reinstall torch with CUDA wheels so it overrides the CPU build
-# that cellpose's pip dependency resolver just installed.  Installing CUDA torch
-# BEFORE requirements.txt causes pip to downgrade it back to the CPU wheel when
-# it resolves cellpose's torch dependency — this is the root cause of GPU being
-# silently ignored even when USE_GPU=true.
+# THEN forcibly reinstall torch + torchvision together from the CUDA index.
+# torchvision must be reinstalled alongside torch because cellpose→segment_anything
+# depends on torchvision, and torchvision C++ extensions are built against a specific
+# torch version. Replacing torch alone (e.g. 2.11.0→2.5.1+cu121) while leaving
+# torchvision 0.26.0 (built for 2.11.0) causes "operator torchvision::nms does not exist"
+# at import time. Reinstalling both from the same cu121 index guarantees a matched pair.
 RUN if [ "$USE_CUDA" = "true" ]; then \
-      pip install --no-cache-dir --force-reinstall torch \
+      pip install --no-cache-dir --force-reinstall torch torchvision \
         --index-url https://download.pytorch.org/whl/cu121; \
     fi
 
