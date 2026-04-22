@@ -5,3 +5,5 @@ cellpose
 numpy
 imageio
 tifffile
+psycopg2-binary
+python-dotenv

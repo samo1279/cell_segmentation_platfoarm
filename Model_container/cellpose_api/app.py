@@ -8,11 +8,41 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response, JSONResponse
 from cellpose import models
 import logging
+import psycopg2
+from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+load_dotenv()
+
 USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+_db_conn = None
+
+
+def _get_db_conn():
+    """Return a live psycopg2 connection, or None if DATABASE_URL is unset.
+
+    The connection is kept as a module-level singleton and re-established
+    automatically if it drops (e.g. PostgreSQL restart).
+    autocommit=True avoids open-transaction side-effects on a long-lived
+    connection.
+    """
+    global _db_conn
+    if not DATABASE_URL:
+        return None
+    try:
+        if _db_conn is None or _db_conn.closed != 0:
+            _db_conn = psycopg2.connect(DATABASE_URL)
+            _db_conn.autocommit = True
+        return _db_conn
+    except Exception as exc:
+        logger.warning("DB connection unavailable: %s", exc)
+        _db_conn = None
+        return None
+
 
 # Limit to one concurrent MODEL.eval() call.
 # Running multiple heavy inference jobs in parallel on the same CPU cores
@@ -49,6 +79,31 @@ async def lifespan(app: FastAPI):
     MODELS["cyto3"] = cyto3_model
     MODELS["cpsam"] = cpsam_model
     MODEL = MODELS["cyto3"]  # backward-compat alias
+
+    # --- DB setup (gracefully skipped when DATABASE_URL is unset) ---
+    conn = _get_db_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS projects (
+                        id             SERIAL PRIMARY KEY,
+                        project_name   TEXT,
+                        image_filename TEXT,
+                        timestamp      TIMESTAMPTZ DEFAULT NOW(),
+                        model_used     TEXT,
+                        cell_count     INT,
+                        mask_path      TEXT
+                    )
+                    """
+                )
+            logger.info("DB table 'projects' ready")
+        except Exception as exc:
+            logger.warning("DB table setup failed: %s", exc)
+    else:
+        logger.info("DATABASE_URL not set — running without persistence")
+
     yield
     MODELS["cyto3"] = None
     MODELS["cpsam"] = None
@@ -180,7 +235,21 @@ async def segment(
         raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(e)}")
 
     masks = result[0]
-    logger.info(f"Segmentation complete. Found {len(np.unique(masks)) - 1} cells")
+    cell_count = int(len(np.unique(masks)) - 1)
+    logger.info(f"Segmentation complete. Found {cell_count} cells")
+
+    # --- Persist job metadata (best-effort; never fails the request) ---
+    conn = _get_db_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO projects (image_filename, model_used, cell_count)"
+                    " VALUES (%s, %s, %s)",
+                    (image.filename, model_type, cell_count),
+                )
+        except Exception as exc:
+            logger.warning("DB insert failed: %s", exc)
 
     buf = io.BytesIO()
     np.save(buf, masks.astype(np.int32))
@@ -195,4 +264,40 @@ async def segment(
             "X-Model-Used": model_type,
         },
     )
-   
+
+
+@app.get("/projects")
+def get_projects():
+    """Return the last 100 segmentation records ordered by most-recent first.
+
+    Returns 503 when the container is running without a database (DATABASE_URL
+    not set), so callers can detect the degraded-mode case cleanly.
+    """
+    conn = _get_db_conn()
+    if conn is None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Database not configured. Set DATABASE_URL to enable persistence."},
+        )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, project_name, image_filename,
+                       timestamp AT TIME ZONE 'UTC' AS timestamp,
+                       model_used, cell_count, mask_path
+                FROM projects
+                ORDER BY timestamp DESC
+                LIMIT 100
+                """
+            )
+            cols = [desc[0] for desc in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        # Convert datetime objects to ISO 8601 strings for JSON serialisation
+        for row in rows:
+            if row.get("timestamp") is not None:
+                row["timestamp"] = row["timestamp"].isoformat()
+        return rows
+    except Exception as exc:
+        logger.error("DB query failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Database query failed: {str(exc)}")

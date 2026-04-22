@@ -4,6 +4,38 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — History Tab (2026-04-22)
+
+### Added
+- `App_container/app.py` — `MODEL_PROJECTS_URL` constant: derives base URL from `MODEL_URL` env var with `/segment` replaced by `/projects`.
+- `App_container/app.py` — `load_history()` function: calls `GET /projects` on the Model Container with a 10 s timeout; parses a JSON list of `{id, image_name, model, cell_count, timestamp}` objects into Dataframe rows; returns an empty list on any network or HTTP error.
+- `App_container/app.py` — **History tab** (`gr.Tab("History")`): `gr.Dataframe` with columns ID, Image name, Model, Cell count, Timestamp; "Refresh" button wired to `load_history()`; "Load Selected" button placeholder present for future wiring.
+
+### Changed
+- `App_container/app.py` — `gr.Tabs()` block now has three tabs: "Single Image", "Batch", "History".
+
+---
+
+## [Unreleased] — Phase 3: Persistence & Annotation Infrastructure (2026-04-22)
+
+### Added
+- `docker-compose.yml` — `db` service: `postgres:16-alpine`, internal-only (`expose: ["5432"]`), `pg_isready` healthcheck, `postgres_data` volume mount.
+- `docker-compose.yml` — `cvat` service: `cvat/server:latest`, internal-only (`expose: ["8080"]`), depends on `db`, mounts `images_volume`.
+- `docker-compose.yml` — Named volumes: `postgres_data`, `images_volume`, `results_volume`.
+- `docker-compose.cpu.yml` — Mirrored `db`, `cvat`, and volume definitions for CPU/macOS dev environments.
+- `Model_container/cellpose_api/app.py` — `_get_db_conn()` helper: reads `DATABASE_URL` env var via `python-dotenv`, maintains a module-level `psycopg2` singleton with auto-reconnect; returns `None` gracefully when `DATABASE_URL` is unset so the container still works in local/test mode without a database.
+- `Model_container/cellpose_api/app.py` — `projects` table DDL executed at startup (`CREATE TABLE IF NOT EXISTS`): columns `id SERIAL PRIMARY KEY`, `project_name TEXT`, `image_filename TEXT`, `timestamp TIMESTAMPTZ DEFAULT NOW()`, `model_used TEXT`, `cell_count INT`, `mask_path TEXT`.
+- `Model_container/cellpose_api/app.py` — `GET /projects` endpoint: returns last 100 rows from `projects` ordered by `timestamp DESC` as a JSON array; returns HTTP 503 with descriptive message when no database is configured.
+- `Model_container/cellpose_api/app.py` — `POST /segment`: best-effort `INSERT INTO projects` after successful inference (filename, model name, cell count); DB failure never aborts the segmentation response.
+- `Model_container/requirements.txt` — Added `psycopg2-binary` and `python-dotenv`.
+- `Model_container/cvat_serverless/function.py` — Nuclio serverless function (~100 lines): `init_context` / `handler` entry points; decodes base64 image from CVAT event body, POSTs to `http://model:8000/segment`, converts returned `masks.npy` to CVAT polygon annotation format via `skimage.measure.find_contours`; all parameters configurable via env vars.
+- `Model_container/cvat_serverless/nuclio.yaml` — Nuclio function descriptor: `python:3.9-slim` base image, builds with `requests`, `numpy`, `scikit-image`; 64 MB max request body; 300 s event timeout; 2 HTTP workers; env vars forwarded to function.
+
+### Changed
+- `docker-compose.yml` — `model` service: added `DATABASE_URL` env var, `images_volume` and `results_volume` mounts, `depends_on: db`.
+- `docker-compose.yml` — `app` service: added `images_volume` and `results_volume` mounts.
+- `docker-compose.cpu.yml` — `model` service: added `DATABASE_URL` env var to match base file.
+
 ## [Unreleased] — Phase 2A + Phase 2C: Batch Processing & UX Improvements (2026-04-20)
 
 ### Added

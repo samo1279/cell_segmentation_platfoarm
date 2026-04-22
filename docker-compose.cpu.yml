@@ -23,6 +23,7 @@ services:
       - PYTHONUNBUFFERED=1
       # Tells CellposeModel(gpu=False) — must match USE_CUDA above.
       - USE_GPU=false
+      - DATABASE_URL=postgresql://cellseg:cellseg@db:5432/cellseg
     deploy:
       resources:
         reservations:
@@ -33,3 +34,41 @@ services:
         limits:
           # No CUDA activations needed; 4G is sufficient for cpsam on CPU.
           memory: 4G
+
+  db:
+    image: postgres:16-alpine
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_DB=cellseg
+      - POSTGRES_USER=cellseg
+      - POSTGRES_PASSWORD=cellseg
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "cellseg"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  cvat:
+    image: cvat/server:latest
+    expose:
+      - "8080"
+    environment:
+      - DJANGO_ALLOWED_HOSTS=localhost
+      - CVAT_POSTGRES_HOST=db
+      - CVAT_POSTGRES_DBNAME=cellseg
+      - CVAT_POSTGRES_USER=cellseg
+      - CVAT_POSTGRES_PASSWORD=cellseg
+    volumes:
+      - images_volume:/data/images
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  images_volume:
+  results_volume:

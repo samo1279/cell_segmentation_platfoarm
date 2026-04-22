@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 MODEL_URL = os.getenv("MODEL_URL", "http://model:8000/segment")
+MODEL_PROJECTS_URL = os.getenv("MODEL_URL", "http://model:8000/segment").replace("/segment", "/projects")
 
 # Tracks temp files from the previous call so they can be deleted at the start
 # of the next call (after Gradio has already served them to the browser).
@@ -178,6 +179,38 @@ def export_csv(stats_df):
     # gr.Dataframe passes a pandas DataFrame when used as input
     stats_df.to_csv(tmp.name, index=False)
     return tmp.name
+
+
+# ---------------------------------------------------------------------------
+# History
+# ---------------------------------------------------------------------------
+
+def load_history():
+    """Fetch past segmentation jobs from GET /projects.
+
+    Returns a list of rows [ID, image name, model, cell count, timestamp].
+    Returns an empty list if the endpoint is unreachable or returns an error.
+    """
+    try:
+        resp = httpx.get(
+            MODEL_PROJECTS_URL,
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        rows = [
+            [
+                entry.get("id", ""),
+                entry.get("image_name", ""),
+                entry.get("model", ""),
+                entry.get("cell_count", ""),
+                entry.get("timestamp", ""),
+            ]
+            for entry in (data if isinstance(data, list) else [])
+        ]
+        return rows
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +423,31 @@ with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
                     batch_cellprob_thresh, batch_model, batch_opacity,
                 ],
                 outputs=[batch_summary, batch_zip],
+            )
+
+        # ------------------------------------------------------------------ #
+        # Tab 3 — History                                                     #
+        # ------------------------------------------------------------------ #
+        with gr.Tab("History"):
+            gr.Markdown(
+                "Past segmentation jobs recorded by the Model Container. "
+                "Click **Refresh** to fetch the latest data."
+            )
+            with gr.Row():
+                history_refresh_btn = gr.Button("Refresh")
+                history_load_btn = gr.Button("Load Selected")
+            history_table = gr.Dataframe(
+                label="Segmentation history",
+                headers=["ID", "Image name", "Model", "Cell count", "Timestamp"],
+                datatype=["number", "str", "str", "number", "str"],
+                col_count=(5, "fixed"),
+                interactive=False,
+            )
+
+            history_refresh_btn.click(
+                fn=load_history,
+                inputs=[],
+                outputs=[history_table],
             )
 
 demo.queue()

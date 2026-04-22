@@ -6,6 +6,9 @@ services:
     environment:
       - GRADIO_SERVER_NAME=0.0.0.0
       - MODEL_URL=http://model:8000/segment
+    volumes:
+      - images_volume:/data/images
+      - results_volume:/data/results
     depends_on:
       model:
         condition: service_healthy
@@ -26,6 +29,13 @@ services:
       - PYTHONUNBUFFERED=1
       # Tells CellposeModel(gpu=True) — must match USE_CUDA above.
       - USE_GPU=true
+      - DATABASE_URL=postgresql://cellseg:cellseg@db:5432/cellseg
+    volumes:
+      - images_volume:/data/images
+      - results_volume:/data/results
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "--max-time", "5", "http://localhost:8000/health"]
       interval: 10s
@@ -42,3 +52,41 @@ services:
         limits:
           # cpsam ViT-H weights (~2 GB) + CUDA activations.
           memory: 8G
+
+  db:
+    image: postgres:16-alpine
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_DB=cellseg
+      - POSTGRES_USER=cellseg
+      - POSTGRES_PASSWORD=cellseg
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "cellseg"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  cvat:
+    image: cvat/server:latest
+    expose:
+      - "8080"
+    environment:
+      - DJANGO_ALLOWED_HOSTS=localhost
+      - CVAT_POSTGRES_HOST=db
+      - CVAT_POSTGRES_DBNAME=cellseg
+      - CVAT_POSTGRES_USER=cellseg
+      - CVAT_POSTGRES_PASSWORD=cellseg
+    volumes:
+      - images_volume:/data/images
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  images_volume:
+  results_volume:
