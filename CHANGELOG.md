@@ -4,6 +4,14 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Re-add 3D z-stack and API key auth (Celery-free) (2026-04-22)
+
+### Added
+- `Model_container/cellpose_api/app.py` — `verify_api_key` FastAPI dependency: validates `X-API-Key` header against `API_KEY` env var; skipped in dev mode when `API_KEY` is unset. Applied to `POST /segment` and `GET /projects`.
+- `Model_container/cellpose_api/app.py` — 3-D z-stack support in synchronous `/segment`: detects multi-frame TIFFs via `iio.improps`, segments each slice independently with `_run_2d()`, stacks results into `(Z, H, W)` masks array. Single-frame images use standard 2-D inference path.
+
+---
+
 ## [Unreleased] — Revert unauthorized Celery/API-key changes (2026-04-22)
 
 ### Fixed

@@ -168,6 +168,110 @@ def segment(image, diameter, flow_threshold, cellprob_threshold, model_type, opa
     return overlay_path, summary, stats_rows, fig, overlay_path, masks_path
 
 
+def _call_model_raw(raw_bytes: bytes, filename: str, mime: str, diameter, flow_threshold, cellprob_threshold, model_type):
+    """POST raw file bytes to Model Container (used for 3D TIFF z-stacks to preserve all frames)."""
+    form_data: dict = {
+        "flow_threshold": flow_threshold,
+        "cellprob_threshold": cellprob_threshold,
+        "model_type": model_type,
+    }
+    if diameter > 0:
+        form_data["diameter"] = diameter
+    resp = httpx.post(
+        MODEL_URL,
+        files={"image": (filename, raw_bytes, mime)},
+        data=form_data,
+        timeout=_MODEL_TIMEOUT,
+    )
+    resp.raise_for_status()
+    active_model = resp.headers.get("x-model-used", model_type)
+    masks = np.load(io.BytesIO(resp.content))
+    return masks, active_model
+
+
+def _render_zstack_slice(masks: np.ndarray, tiff_path: str, z_idx: int, model_name: str, n_slices: int, opacity: float):
+    """Render a coloured overlay for one z-slice; return (overlay_path, summary_str)."""
+    is_zstack = masks.ndim == 3
+    if is_zstack:
+        slice_masks = masks[z_idx]
+        frames = iio.imread(tiff_path)
+        frame = frames[z_idx] if frames.ndim >= 3 else frames
+    else:
+        slice_masks = masks
+        frame = iio.imread(tiff_path)
+
+    if frame.ndim == 2:
+        frame_rgb = np.stack([frame, frame, frame], axis=-1)
+    elif frame.shape[-1] >= 4:
+        frame_rgb = frame[:, :, :3]
+    else:
+        frame_rgb = frame
+
+    overlay_uint8 = _render_overlay(frame_rgb.astype(np.uint8), slice_masks, opacity)
+    cell_count = int(len(np.unique(slice_masks)) - 1)
+
+    ov_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    Image.fromarray(overlay_uint8).save(ov_tmp.name)
+    ov_tmp.close()
+
+    summary = (
+        f"Model: {model_name} | Z-stack: {n_slices} slice(s) | "
+        f"Slice {z_idx + 1}/{n_slices}: {cell_count} cells"
+    )
+    return ov_tmp.name, summary
+
+
+# ---------------------------------------------------------------------------
+# 3-D Z-stack segmentation
+# ---------------------------------------------------------------------------
+
+def segment_3d(tiff_file, diameter, flow_threshold, cellprob_threshold, model_type, opacity):
+    """Send a raw multi-frame TIFF to the model; return per-slice overlay."""
+    if tiff_file is None:
+        raise gr.Error("Please upload a multi-frame TIFF file.")
+
+    file_path = tiff_file if isinstance(tiff_file, str) else tiff_file.name
+    filename = os.path.basename(file_path)
+
+    with open(file_path, "rb") as fh:
+        raw_bytes = fh.read()
+
+    try:
+        masks, active_model = _call_model_raw(
+            raw_bytes, filename, "image/tiff",
+            diameter, flow_threshold, cellprob_threshold, model_type,
+        )
+    except httpx.HTTPStatusError as e:
+        raise gr.Error(f"Segmentation failed (HTTP {e.response.status_code}): {e.response.text}")
+    except httpx.TimeoutException:
+        raise gr.Error("Segmentation timed out after 15 minutes.")
+    except httpx.RequestError as e:
+        raise gr.Error(f"Cannot reach model container ({type(e).__name__}).")
+
+    n_slices = masks.shape[0] if masks.ndim == 3 else 1
+
+    # Save full 3D masks for download
+    masks_tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
+    np.save(masks_tmp.name, masks)
+    masks_tmp.close()
+
+    overlay_path, summary = _render_zstack_slice(masks, file_path, 0, active_model, n_slices, opacity)
+    slider_update = gr.update(maximum=n_slices - 1, value=0, visible=n_slices > 1)
+
+    # Return masks_path twice: once for download File, once for gr.State
+    return overlay_path, summary, masks_tmp.name, masks_tmp.name, file_path, slider_update
+
+
+def navigate_zslice(z_idx, masks_path, tiff_path, opacity):
+    """Re-render overlay when the user moves the z-slice slider."""
+    if not masks_path or not tiff_path:
+        return None, ""
+    masks = np.load(masks_path)
+    n_slices = masks.shape[0] if masks.ndim == 3 else 1
+    overlay_path, summary = _render_zstack_slice(masks, tiff_path, int(z_idx), "–", n_slices, opacity)
+    return overlay_path, summary
+
+
 def export_csv(stats_df):
     """Export the per-cell stats Dataframe as a CSV file."""
     if stats_df is None or len(stats_df) == 0:
@@ -375,6 +479,53 @@ with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
                 inputs=[stats_table],
                 outputs=[csv_file],
             )
+
+            # -------------------------------------------------------------- #
+            # 3-D Z-Stack section (inside Single Image tab)                  #
+            # -------------------------------------------------------------- #
+            with gr.Accordion("3D Z-Stack (multi-frame TIFF)", open=False):
+                gr.Markdown(
+                    "Upload a **multi-frame TIFF** (z-stack). "
+                    "The backend automatically detects the number of slices and segments each one independently. "
+                    "Use the **Z-slice** slider to browse per-slice overlays after segmentation."
+                )
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        zstack_file = gr.File(
+                            file_types=[".tiff", ".tif"],
+                            label="Upload multi-frame TIFF",
+                        )
+                        zstack_z_slider = gr.Slider(
+                            minimum=0, maximum=0, step=1, value=0,
+                            label="Z-slice", visible=False,
+                        )
+                        zstack_btn = gr.Button("Segment 3D Z-Stack", variant="primary")
+                    with gr.Column(scale=2):
+                        zstack_overlay = gr.Image(label="Z-slice overlay")
+                        zstack_summary = gr.Textbox(label="Z-stack summary", lines=2)
+                        zstack_masks_file = gr.File(label="Download 3D masks.npy (all slices)")
+
+                # Hidden state components for slice navigation
+                zstack_masks_state = gr.State(None)
+                zstack_tiff_state = gr.State(None)
+
+                zstack_btn.click(
+                    fn=segment_3d,
+                    inputs=[
+                        zstack_file, diameter, flow_thresh, cellprob_thresh,
+                        model_choice, opacity_slider,
+                    ],
+                    outputs=[
+                        zstack_overlay, zstack_summary,
+                        zstack_masks_file, zstack_masks_state,
+                        zstack_tiff_state, zstack_z_slider,
+                    ],
+                )
+                zstack_z_slider.change(
+                    fn=navigate_zslice,
+                    inputs=[zstack_z_slider, zstack_masks_state, zstack_tiff_state, opacity_slider],
+                    outputs=[zstack_overlay, zstack_summary],
+                )
 
         # ------------------------------------------------------------------ #
         # Tab 2 — Batch                                                       #

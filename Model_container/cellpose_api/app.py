@@ -4,7 +4,7 @@ import os
 import numpy as np
 import imageio.v3 as iio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import Depends, FastAPI, Header, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response, JSONResponse
 from cellpose import models
 import logging
@@ -18,6 +18,7 @@ load_dotenv()
 
 USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
 DATABASE_URL = os.environ.get("DATABASE_URL")
+API_KEY: str | None = os.environ.get("API_KEY") or None
 
 _db_conn = None
 
@@ -50,6 +51,12 @@ def _get_db_conn():
 # Requests queue here instead of competing; health probes are unaffected
 # because /health is a lightweight async function on the event loop.
 _INFER_SEM = asyncio.Semaphore(1)
+
+
+async def verify_api_key(x_api_key: str = Header(default=None)) -> None:
+    """Validate X-API-Key header. Skipped when API_KEY env var is unset (dev mode)."""
+    if API_KEY is not None and x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # Model is loaded during startup so uvicorn binds port 8000 immediately.
@@ -162,7 +169,7 @@ def parameters():
     }
 
 
-@app.post("/segment")
+@app.post("/segment", dependencies=[Depends(verify_api_key)])
 async def segment(
     image: UploadFile = File(...),
     model_type: str = Form(default="cyto3"),
@@ -212,26 +219,49 @@ async def segment(
     logger.info(f"Processing image: {image.filename}, shape={img.shape}")
     logger.info(f"Using model: {model_type}")
 
+    # --- 3-D z-stack detection ---
+    # Multi-frame TIFFs are segmented slice-by-slice; results stacked as (Z, H, W).
+    # Single-frame images fall through to standard 2-D inference.
+    is_zstack = False
+    try:
+        props = iio.improps(io.BytesIO(data))
+        is_zstack = props.n_frames is not None and props.n_frames > 1
+    except Exception:
+        pass
+
+    if is_zstack:
+        logger.info(f"3-D z-stack detected: {props.n_frames} frames")
+
     # --- Segmentation ---
     channel_axis = None if img.ndim == 2 else 2
+
+    def _run_2d(frame):
+        ch_ax = None if frame.ndim == 2 else 2
+        res = selected_model.eval(
+            frame,
+            diameter=diameter,
+            flow_threshold=flow_threshold,
+            cellprob_threshold=cellprob_threshold,
+            channel_axis=ch_ax,
+        )
+        return res[0]  # masks only
+
+    def _run_inference():
+        if is_zstack:
+            frames = iio.imread(io.BytesIO(data))
+            slices = [_run_2d(frames[i]) for i in range(frames.shape[0])]
+            return np.stack(slices, axis=0)  # (Z, H, W)
+        else:
+            return _run_2d(img)
+
     try:
         loop = asyncio.get_event_loop()
         async with _INFER_SEM:
-            result = await loop.run_in_executor(
-                None,
-                lambda: selected_model.eval(
-                    img,
-                    diameter=diameter,
-                    flow_threshold=flow_threshold,
-                    cellprob_threshold=cellprob_threshold,
-                    channel_axis=channel_axis,
-                ),
-            )
+            masks = await loop.run_in_executor(None, _run_inference)
     except Exception as e:
         logger.error(f"Segmentation error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(e)}")
 
-    masks = result[0]
     cell_count = int(len(np.unique(masks)) - 1)
     logger.info(f"Segmentation complete. Found {cell_count} cells")
 
@@ -262,7 +292,7 @@ async def segment(
     )
 
 
-@app.get("/projects")
+@app.get("/projects", dependencies=[Depends(verify_api_key)])
 def get_projects():
     """Return the last 100 segmentation records ordered by most-recent first.
 
