@@ -4,6 +4,54 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — API Auth, Async Queue, 3-D Segmentation, GDPR Audit Log (2026-04-22)
+
+### Added
+- `Model_container/cellpose_api/tasks.py` (**new file**) — Celery application (`celery_app`) with a
+  `run_segmentation` task (name `cellpose_tasks.run_segmentation`) that:
+  - lazy-loads the requested Cellpose model on first call inside the worker process;
+  - detects multi-frame TIFFs via `imageio.v3.improps` and segments each z-slice independently,
+    stacking per-slice masks into a `(Z, H, W)` array (3-D z-stack support);
+  - falls back to standard 2-D `model.eval()` for single-frame images;
+  - returns masks serialised as a `.npy` binary blob (``bytes``) stored in the Celery result backend.
+  - Reads `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` env vars (default: `redis://redis:6379/0`).
+  - Configured with pickle serialiser so large NumPy byte payloads round-trip correctly.
+- `Model_container/cellpose_api/app.py` — `API_KEY` env var read at startup; `verify_api_key`
+  FastAPI dependency (`X-API-Key` header): raises HTTP 401 if `API_KEY` is set and the header
+  does not match; silently passes through when `API_KEY` is unset (open dev mode).
+- `Model_container/cellpose_api/app.py` — `GET /segment/{job_id}` endpoint: polls the Celery
+  result backend; returns HTTP 202 + `{"status": "pending"|"started"|"retry", "job_id": "..."}` while
+  the task is running; returns `application/octet-stream` masks.npy on success; raises HTTP 500 on
+  task failure.
+- `Model_container/cellpose_api/app.py` — `audit_log` table DDL executed at startup
+  (`CREATE TABLE IF NOT EXISTS`): columns `id SERIAL PRIMARY KEY`, `action TEXT NOT NULL`,
+  `image_hash TEXT NOT NULL` (SHA-256 of raw image bytes — no filename, GDPR-safe),
+  `timestamp TIMESTAMPTZ DEFAULT NOW()`.
+- `Model_container/cellpose_api/app.py` — On every `POST /segment` call, inserts a row into
+  `audit_log` (best-effort; never aborts the request on DB failure).
+- `Model_container/cellpose_api/app.py` — On startup, executes
+  `DELETE FROM projects WHERE timestamp < NOW() - INTERVAL '30 days'` to auto-purge stale records
+  (GDPR data-minimisation requirement).
+- `Model_container/requirements.txt` — Added `celery[redis]` and `redis`.
+- `docker-compose.yml` — `redis` service: `redis:7-alpine`, internal-only (`expose: ["6379"]`),
+  `redis-cli ping` healthcheck.
+- `docker-compose.yml` — `celery_worker` service: same image as `model`, command
+  `celery -A tasks.celery_app worker --loglevel=info --concurrency=1`, depends on `db` + `redis`,
+  GPU reservation, 8 G memory limit.
+- `Model_container/Dockerfile` — `COPY cellpose_api/tasks.py .` so the worker image includes the
+  task definitions.
+
+### Changed
+- `Model_container/cellpose_api/app.py` — `POST /segment`: now a **202 Accepted** endpoint;
+  validates the image and enqueues `run_segmentation.delay(...)` via Celery instead of running
+  `model.eval()` inline; returns `{"job_id": "<celery-task-id>"}`.  Synchronous inference and
+  direct mask streaming have been moved to the Celery worker.
+- `Model_container/cellpose_api/app.py` — `POST /segment` and `GET /segment/{job_id}` and
+  `GET /projects` now require the `X-API-Key` header when `API_KEY` env var is set (protected by
+  `Depends(verify_api_key)`).  `GET /health` and `GET /parameters` remain unauthenticated.
+- `docker-compose.yml` — `model` service: added `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, and
+  `API_KEY` env vars; added `redis` to `depends_on` (condition: service_healthy).
+
 ## [Unreleased] — History Tab (2026-04-22)
 
 ### Added

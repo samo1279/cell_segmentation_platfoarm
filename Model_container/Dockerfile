@@ -39,6 +39,7 @@ RUN if [ "$USE_CUDA" = "true" ]; then \
 RUN python -c "from cellpose import models; models.CellposeModel(gpu=False, pretrained_model='cyto3'); print('cyto3 weights downloaded'); models.CellposeModel(gpu=False, pretrained_model='cpsam'); print('cpsam weights downloaded')"
 
 COPY cellpose_api/app.py .
+COPY cellpose_api/tasks.py .
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

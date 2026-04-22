@@ -30,11 +30,17 @@ services:
       # Tells CellposeModel(gpu=True) — must match USE_CUDA above.
       - USE_GPU=true
       - DATABASE_URL=postgresql://cellseg:cellseg@db:5432/cellseg
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      # Set API_KEY to a secret value to enable authentication; leave blank for open dev access.
+      - API_KEY=
     volumes:
       - images_volume:/data/images
       - results_volume:/data/results
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "--max-time", "5", "http://localhost:8000/health"]
@@ -52,6 +58,48 @@ services:
         limits:
           # cpsam ViT-H weights (~2 GB) + CUDA activations.
           memory: 8G
+
+  celery_worker:
+    build:
+      context: ./Model_container
+      args:
+        USE_CUDA: "true"
+    command: celery -A tasks.celery_app worker --loglevel=info --concurrency=1
+    environment:
+      - PYTHONUNBUFFERED=1
+      - USE_GPU=true
+      - DATABASE_URL=postgresql://cellseg:cellseg@db:5432/cellseg
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - API_KEY=
+    volumes:
+      - images_volume:/data/images
+      - results_volume:/data/results
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 8G
+
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   db:
     image: postgres:16-alpine
