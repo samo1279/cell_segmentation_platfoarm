@@ -4,7 +4,22 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — API Auth, Async Queue, 3-D Segmentation, GDPR Audit Log (2026-04-22)
+## [Unreleased] — Revert unauthorized Celery/API-key changes (2026-04-22)
+
+### Fixed
+- Removed spurious `from celery.result import AsyncResult` and `from tasks import run_segmentation, celery_app` imports from `Model_container/cellpose_api/app.py` that caused `ModuleNotFoundError: No module named 'celery'` in CI, collecting 0 tests.
+- Reverted `/segment` endpoint from Celery async-dispatch back to synchronous inline inference (design-compliant).
+- Removed `GET /segment/{job_id}` polling endpoint (not part of design contract).
+- Removed `verify_api_key` dependency and `API_KEY` env var (not part of design contract).
+- Removed `audit_log` table creation and GDPR hash logic (not part of design contract).
+- Removed `celery[redis]` and `redis` from `Model_container/requirements.txt`.
+
+### Removed
+- All Celery/Redis/API-key additions that violated the "No Celery, No Redis" constraint in the system design document.
+
+---
+
+## [Unreleased] — API Auth, Async Queue, 3-D Segmentation, GDPR Audit Log (2026-04-22) [REVERTED]
 
 ### Added
 - `Model_container/cellpose_api/tasks.py` (**new file**) — Celery application (`celery_app`) with a

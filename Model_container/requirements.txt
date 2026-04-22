@@ -7,5 +7,3 @@ imageio
 tifffile
 psycopg2-binary
 python-dotenv
-celery[redis]
-redis

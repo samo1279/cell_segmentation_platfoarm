@@ -1,18 +1,15 @@
 import asyncio
-import hashlib
 import io
 import os
 import numpy as np
 import imageio.v3 as iio
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, Header, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response, JSONResponse
 from cellpose import models
-from celery.result import AsyncResult
 import logging
 import psycopg2
 from dotenv import load_dotenv
-from tasks import run_segmentation, celery_app as _celery_app
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,7 +18,6 @@ load_dotenv()
 
 USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
 DATABASE_URL = os.environ.get("DATABASE_URL")
-API_KEY: str | None = os.environ.get("API_KEY")
 
 _db_conn = None
 
@@ -54,16 +50,6 @@ def _get_db_conn():
 # Requests queue here instead of competing; health probes are unaffected
 # because /health is a lightweight async function on the event loop.
 _INFER_SEM = asyncio.Semaphore(1)
-
-
-async def verify_api_key(x_api_key: str = Header(default=None)) -> None:
-    """Validate X-API-Key header against the API_KEY env var.
-
-    When API_KEY is unset the check is skipped so the container works in
-    local/dev mode without authentication.
-    """
-    if API_KEY is not None and x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # Model is loaded during startup so uvicorn binds port 8000 immediately.
@@ -113,21 +99,7 @@ async def lifespan(app: FastAPI):
                     )
                     """
                 )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS audit_log (
-                        id          SERIAL PRIMARY KEY,
-                        action      TEXT        NOT NULL,
-                        image_hash  TEXT        NOT NULL,
-                        timestamp   TIMESTAMPTZ DEFAULT NOW()
-                    )
-                    """
-                )
-                # GDPR: purge project records older than 30 days on every startup
-                cur.execute(
-                    "DELETE FROM projects WHERE timestamp < NOW() - INTERVAL '30 days'"
-                )
-            logger.info("DB tables ready; stale projects purged (>30 days)")
+            logger.info("DB table 'projects' ready")
         except Exception as exc:
             logger.warning("DB table setup failed: %s", exc)
     else:
@@ -190,7 +162,7 @@ def parameters():
     }
 
 
-@app.post("/segment", dependencies=[Depends(verify_api_key)])
+@app.post("/segment")
 async def segment(
     image: UploadFile = File(...),
     model_type: str = Form(default="cyto3"),
@@ -203,6 +175,9 @@ async def segment(
             status_code=422,
             detail=f"Invalid model_type '{model_type}'. Must be one of: {list(MODELS.keys())}.",
         )
+    selected_model = MODELS[model_type]
+    if selected_model is None:
+        raise HTTPException(status_code=503, detail="Model is still loading, please retry in a few seconds.")
 
     # --- Input validation ---
     ext = os.path.splitext(image.filename or "")[1].lower()
@@ -234,55 +209,60 @@ async def segment(
                 detail=f"Image resolution {w}x{h} exceeds maximum {MAX_DIMENSION}x{MAX_DIMENSION}.",
             )
 
-    logger.info("Enqueuing segmentation: file=%s model=%s", image.filename, model_type)
+    logger.info(f"Processing image: {image.filename}, shape={img.shape}")
+    logger.info(f"Using model: {model_type}")
 
-    # Compute SHA-256 of raw bytes for GDPR-safe audit logging (no filename stored)
-    image_hash = hashlib.sha256(data).hexdigest()
+    # --- Segmentation ---
+    channel_axis = None if img.ndim == 2 else 2
+    try:
+        loop = asyncio.get_event_loop()
+        async with _INFER_SEM:
+            result = await loop.run_in_executor(
+                None,
+                lambda: selected_model.eval(
+                    img,
+                    diameter=diameter,
+                    flow_threshold=flow_threshold,
+                    cellprob_threshold=cellprob_threshold,
+                    channel_axis=channel_axis,
+                ),
+            )
+    except Exception as e:
+        logger.error(f"Segmentation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(e)}")
 
-    # Dispatch to the Celery worker; inference and 3-D z-stack detection run there
-    task = run_segmentation.delay(data, model_type, diameter, flow_threshold, cellprob_threshold)
+    masks = result[0]
+    cell_count = int(len(np.unique(masks)) - 1)
+    logger.info(f"Segmentation complete. Found {cell_count} cells")
 
-    # --- GDPR audit log (best-effort; never fails the request) ---
+    # --- Persist job metadata (best-effort; never fails the request) ---
     conn = _get_db_conn()
     if conn:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO audit_log (action, image_hash) VALUES (%s, %s)",
-                    ("segment", image_hash),
+                    "INSERT INTO projects (image_filename, model_used, cell_count)"
+                    " VALUES (%s, %s, %s)",
+                    (image.filename, model_type, cell_count),
                 )
         except Exception as exc:
-            logger.warning("Audit log insert failed: %s", exc)
+            logger.warning("DB insert failed: %s", exc)
 
-    return JSONResponse(status_code=202, content={"job_id": task.id})
+    buf = io.BytesIO()
+    np.save(buf, masks.astype(np.int32))
+    buf.seek(0)
 
-
-@app.get("/segment/{job_id}", dependencies=[Depends(verify_api_key)])
-async def get_segment_result(job_id: str):
-    """Poll the result of an async segmentation job.
-
-    Returns 202 while the job is pending/running; returns the masks.npy binary
-    (``application/octet-stream``) once the task completes successfully.
-    """
-    result = AsyncResult(job_id, app=_celery_app)
-    if result.state in ("PENDING", "STARTED", "RETRY"):
-        return JSONResponse(
-            status_code=202,
-            content={"status": result.state.lower(), "job_id": job_id},
-        )
-    if result.state == "SUCCESS":
-        mask_bytes: bytes = result.get()
-        return Response(
-            content=mask_bytes,
-            media_type="application/octet-stream",
-            headers={"Content-Disposition": "attachment; filename=masks.npy"},
-        )
-    # FAILURE or unknown terminal state
-    error_detail = str(result.result) if result.result else "Unknown error"
-    raise HTTPException(status_code=500, detail=f"Segmentation failed: {error_detail}")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": "attachment; filename=masks.npy",
+            "X-Model-Used": model_type,
+        },
+    )
 
 
-@app.get("/projects", dependencies=[Depends(verify_api_key)])
+@app.get("/projects")
 def get_projects():
     """Return the last 100 segmentation records ordered by most-recent first.
 
