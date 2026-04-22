@@ -10,3 +10,4 @@ imageio
 tifffile
 Pillow
 anyio[trio]
+psycopg2-binary
