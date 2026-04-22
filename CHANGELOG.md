@@ -16,6 +16,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased] — Fix History tab empty (2026-04-22)
+
+### Fixed
+- `App_container/app.py` — `load_history()` was reading wrong JSON keys (`image_name`, `model`) from `GET /projects`; corrected to `image_filename` and `model_used` matching the actual API response.
+- `helm-chart/templates/deployment.yaml` — Added `DATABASE_URL` env var to the model container so `psycopg2` can connect to PostgreSQL in the cluster; previously missing, causing `_get_db_conn()` to return `None` and `/projects` to always return 503.
+- `helm-chart/templates/deployment.yaml` — Added PostgreSQL `Deployment` (postgres:16-alpine) with readiness probe.
+- `helm-chart/templates/services.yaml` — Added PostgreSQL `ClusterIP` Service (`{{ .Release.Name }}-db:5432`).
+- `helm-chart/values.yaml` — Added `db:` block with image, port, name, user, password.
+
 ## [Unreleased] — Phase 3: Persistence & Annotation Infrastructure (2026-04-22)
 
 ### Added

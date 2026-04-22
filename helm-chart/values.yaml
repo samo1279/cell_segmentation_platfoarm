@@ -38,3 +38,11 @@ model:
 # --- Ingress ---
 ingress:
   host: cellpose-poc.g007.imec.local
+
+# --- PostgreSQL (persistence for segmentation history) ---
+db:
+  image: postgres:16-alpine
+  port: 5432
+  name: cellseg
+  user: cellseg
+  password: cellseg

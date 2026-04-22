@@ -201,8 +201,8 @@ def load_history():
         rows = [
             [
                 entry.get("id", ""),
-                entry.get("image_name", ""),
-                entry.get("model", ""),
+                entry.get("image_filename", ""),
+                entry.get("model_used", ""),
                 entry.get("cell_count", ""),
                 entry.get("timestamp", ""),
             ]

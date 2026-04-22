@@ -22,3 +22,16 @@ spec:
       targetPort: {{ .Values.model.port }}
   selector:
     app: {{ .Release.Name }}-model
+---
+# --- PostgreSQL Service (ClusterIP — internal only) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-db
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.db.port }}
+      targetPort: {{ .Values.db.port }}
+  selector:
+    app: {{ .Release.Name }}-db
