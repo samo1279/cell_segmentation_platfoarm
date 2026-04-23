@@ -16,6 +16,8 @@ from PIL import Image
 MODEL_URL = os.getenv("MODEL_URL", "http://model:8000/segment")
 MODEL_PROJECTS_URL = os.getenv("MODEL_URL", "http://model:8000/segment").replace("/segment", "/projects")
 MODEL_API_KEY: str | None = os.getenv("MODEL_API_KEY") or None
+# ADMIN_USER — if set, this username bypasses the per-user history filter and sees all records.
+ADMIN_USER: str | None = os.getenv("ADMIN_USER") or None
 
 # APP_USERS — comma-separated "user:password" pairs for the Gradio login screen.
 # Example: APP_USERS=admin:secret,viewer:readonly
@@ -48,7 +50,7 @@ def _encode_png(image_np: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def _call_model(image_bytes: bytes, diameter, flow_threshold, cellprob_threshold, model_type):
+def _call_model(image_bytes: bytes, diameter, flow_threshold, cellprob_threshold, model_type, username=None):
     """POST image to Model Container; return (masks_np, active_model_str)."""
     form_data: dict = {
         "flow_threshold": flow_threshold,
@@ -57,6 +59,8 @@ def _call_model(image_bytes: bytes, diameter, flow_threshold, cellprob_threshold
     }
     if diameter > 0:
         form_data["diameter"] = diameter
+    if username:
+        form_data["username"] = username
     headers = {"X-API-Key": MODEL_API_KEY} if MODEL_API_KEY else {}
     resp = httpx.post(
         MODEL_URL,
@@ -106,7 +110,7 @@ def _compute_stats(masks: np.ndarray):
 # Single-image segmentation
 # ---------------------------------------------------------------------------
 
-def segment(image, diameter, flow_threshold, cellprob_threshold, model_type, opacity):
+def segment(image, diameter, flow_threshold, cellprob_threshold, model_type, opacity, request: gr.Request = None):
     """Upload image to Model Container, return overlay + stats."""
     global _pending_cleanup
     for _p in _pending_cleanup:
@@ -119,11 +123,13 @@ def segment(image, diameter, flow_threshold, cellprob_threshold, model_type, opa
     if image is None:
         raise gr.Error("Please upload an image first.")
 
+    username = getattr(request, "username", None) if request else None
     image_bytes = _encode_png(image)
 
     try:
         masks, active_model = _call_model(
-            image_bytes, diameter, flow_threshold, cellprob_threshold, model_type
+            image_bytes, diameter, flow_threshold, cellprob_threshold, model_type,
+            username=username,
         )
     except httpx.HTTPStatusError as e:
         raise gr.Error(
@@ -184,7 +190,7 @@ def segment(image, diameter, flow_threshold, cellprob_threshold, model_type, opa
     return overlay_path, summary, stats_rows, fig, overlay_path, masks_path
 
 
-def _call_model_raw(raw_bytes: bytes, filename: str, mime: str, diameter, flow_threshold, cellprob_threshold, model_type):
+def _call_model_raw(raw_bytes: bytes, filename: str, mime: str, diameter, flow_threshold, cellprob_threshold, model_type, username=None):
     """POST raw file bytes to Model Container (used for 3D TIFF z-stacks to preserve all frames)."""
     form_data: dict = {
         "flow_threshold": flow_threshold,
@@ -193,6 +199,8 @@ def _call_model_raw(raw_bytes: bytes, filename: str, mime: str, diameter, flow_t
     }
     if diameter > 0:
         form_data["diameter"] = diameter
+    if username:
+        form_data["username"] = username
     headers = {"X-API-Key": MODEL_API_KEY} if MODEL_API_KEY else {}
     resp = httpx.post(
         MODEL_URL,
@@ -251,11 +259,12 @@ def _render_zstack_slice(masks: np.ndarray, tiff_path: str, z_idx: int, model_na
 # 3-D Z-stack segmentation
 # ---------------------------------------------------------------------------
 
-def segment_3d(tiff_file, diameter, flow_threshold, cellprob_threshold, model_type, opacity):
+def segment_3d(tiff_file, diameter, flow_threshold, cellprob_threshold, model_type, opacity, request: gr.Request = None):
     """Send a raw multi-frame TIFF to the model; return per-slice overlay."""
     if tiff_file is None:
         raise gr.Error("Please upload a multi-frame TIFF file.")
 
+    username = getattr(request, "username", None) if request else None
     file_path = tiff_file if isinstance(tiff_file, str) else tiff_file.name
     filename = os.path.basename(file_path)
 
@@ -266,6 +275,7 @@ def segment_3d(tiff_file, diameter, flow_threshold, cellprob_threshold, model_ty
         masks, active_model = _call_model_raw(
             raw_bytes, filename, "image/tiff",
             diameter, flow_threshold, cellprob_threshold, model_type,
+            username=username,
         )
     except httpx.HTTPStatusError as e:
         raise gr.Error(f"Segmentation failed (HTTP {e.response.status_code}): {e.response.text}")
@@ -315,13 +325,21 @@ def export_csv(stats_df):
 # History
 # ---------------------------------------------------------------------------
 
-def load_history():
-    """Fetch past segmentation jobs from GET /projects."""
+def load_history(request: gr.Request = None):
+    """Fetch past segmentation jobs from GET /projects.
+
+    When a user is logged in, only their own records are returned.
+    If the user matches ADMIN_USER, all records are returned (no filter).
+    """
     try:
         headers = {"X-API-Key": MODEL_API_KEY} if MODEL_API_KEY else {}
+        username = getattr(request, "username", None) if request else None
+        is_admin = (username is not None and username == ADMIN_USER)
+        params = {} if (is_admin or not username) else {"user": username}
         resp = httpx.get(
             MODEL_PROJECTS_URL,
             headers=headers,
+            params=params,
             timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
         )
         resp.raise_for_status()
@@ -353,6 +371,7 @@ def batch_segment(
     model_type,
     opacity,
     progress=gr.Progress(),
+    request: gr.Request = None,
 ):
     """Segment multiple images and return a summary table + ZIP of results."""
     global _pending_batch_cleanup
@@ -366,6 +385,7 @@ def batch_segment(
     if not files:
         raise gr.Error("Please upload at least one image.")
 
+    username = getattr(request, "username", None) if request else None
     summary_rows = []
     overlay_entries: list[tuple[str, str]] = []  # (arcname, tmp_path)
     masks_entries: list[tuple[str, str]] = []
@@ -384,7 +404,8 @@ def batch_segment(
             image_np = np.array(img_pil)
             image_bytes = _encode_png(image_np)
             masks, active_model = _call_model(
-                image_bytes, diameter, flow_threshold, cellprob_threshold, model_type
+                image_bytes, diameter, flow_threshold, cellprob_threshold, model_type,
+                username=username,
             )
         except Exception as exc:
             summary_rows.append(

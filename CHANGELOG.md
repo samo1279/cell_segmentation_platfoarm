@@ -4,6 +4,24 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Per-user data isolation (Phase 4 completion)
+
+### Added
+- `Model_container/cellpose_api/app.py` — `username TEXT` column added to `CREATE TABLE IF NOT EXISTS projects` schema.
+- `Model_container/cellpose_api/app.py` — `ALTER TABLE projects ADD COLUMN IF NOT EXISTS username TEXT` migration runs at startup so pre-existing tables are upgraded automatically.
+- `Model_container/cellpose_api/app.py` — `POST /segment` now accepts optional `username` Form field; value is persisted in the `projects` table INSERT.
+- `Model_container/cellpose_api/app.py` — `GET /projects` accepts optional `?user=` query parameter; when present, results are filtered to that user's records only. Omitting the parameter returns all records (admin path).
+- `App_container/app.py` — `ADMIN_USER` env var: if the logged-in username matches this value, `load_history()` returns all records (no per-user filter).
+- `App_container/app.py` — `_call_model()` and `_call_model_raw()` accept optional `username=` keyword argument; when set, the value is forwarded as a Form field to `POST /segment`.
+- `App_container/app.py` — `segment()`, `batch_segment()`, `segment_3d()`, and `load_history()` now accept `request: gr.Request` (auto-injected by Gradio); the logged-in username is extracted via `request.username` and forwarded to all model calls.
+- `docker-compose.yml` — `ADMIN_USER=` environment variable added to the `app` service.
+
+### Changed
+- `App_container/app.py` — `load_history()` conditionally passes `?user=<username>` to `GET /projects` unless the caller is the admin user or no user is logged in.
+- `Model_container/cellpose_api/app.py` — `/projects` SELECT now includes the `username` column in its result set.
+
+---
+
 ## [Unreleased] — Re-add 3D z-stack and API key auth (Celery-free) (2026-04-22)
 
 ### Added

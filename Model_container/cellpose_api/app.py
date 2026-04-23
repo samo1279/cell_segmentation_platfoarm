@@ -102,9 +102,14 @@ async def lifespan(app: FastAPI):
                         timestamp      TIMESTAMPTZ DEFAULT NOW(),
                         model_used     TEXT,
                         cell_count     INT,
-                        mask_path      TEXT
+                        mask_path      TEXT,
+                        username       TEXT
                     )
                     """
+                )
+                # Migration: add username column to pre-existing tables
+                cur.execute(
+                    "ALTER TABLE projects ADD COLUMN IF NOT EXISTS username TEXT"
                 )
             logger.info("DB table 'projects' ready")
         except Exception as exc:
@@ -176,6 +181,7 @@ async def segment(
     diameter: float | None = Form(default=None),
     flow_threshold: float = Form(default=0.4),
     cellprob_threshold: float = Form(default=0.0),
+    username: str | None = Form(default=None),
 ):
     if model_type not in MODELS:
         raise HTTPException(
@@ -271,9 +277,9 @@ async def segment(
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO projects (image_filename, model_used, cell_count)"
-                    " VALUES (%s, %s, %s)",
-                    (image.filename, model_type, cell_count),
+                    "INSERT INTO projects (image_filename, model_used, cell_count, username)"
+                    " VALUES (%s, %s, %s, %s)",
+                    (image.filename, model_type, cell_count, username),
                 )
         except Exception as exc:
             logger.warning("DB insert failed: %s", exc)
@@ -293,8 +299,11 @@ async def segment(
 
 
 @app.get("/projects", dependencies=[Depends(verify_api_key)])
-def get_projects():
+def get_projects(user: str | None = None):
     """Return the last 100 segmentation records ordered by most-recent first.
+
+    Pass ``?user=alice`` to restrict results to a single user.  Omit the
+    parameter (or use it only from an admin caller) to retrieve all records.
 
     Returns 503 when the container is running without a database (DATABASE_URL
     not set), so callers can detect the degraded-mode case cleanly.
@@ -307,16 +316,30 @@ def get_projects():
         )
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, project_name, image_filename,
-                       timestamp AT TIME ZONE 'UTC' AS timestamp,
-                       model_used, cell_count, mask_path
-                FROM projects
-                ORDER BY timestamp DESC
-                LIMIT 100
-                """
-            )
+            if user:
+                cur.execute(
+                    """
+                    SELECT id, project_name, image_filename,
+                           timestamp AT TIME ZONE 'UTC' AS timestamp,
+                           model_used, cell_count, mask_path, username
+                    FROM projects
+                    WHERE username = %s
+                    ORDER BY timestamp DESC
+                    LIMIT 100
+                    """,
+                    (user,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, project_name, image_filename,
+                           timestamp AT TIME ZONE 'UTC' AS timestamp,
+                           model_used, cell_count, mask_path, username
+                    FROM projects
+                    ORDER BY timestamp DESC
+                    LIMIT 100
+                    """
+                )
             cols = [desc[0] for desc in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
         # Convert datetime objects to ISO 8601 strings for JSON serialisation

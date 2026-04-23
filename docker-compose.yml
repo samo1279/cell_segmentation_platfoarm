@@ -12,6 +12,9 @@ services:
       # Example: APP_USERS=admin:secret,viewer:readonly
       # Leave blank for open dev access.
       - APP_USERS=
+      # Set ADMIN_USER to the username that should see ALL history records (bypass per-user filter).
+      # Example: ADMIN_USER=admin
+      - ADMIN_USER=
     volumes:
       - images_volume:/data/images
       - results_volume:/data/results
