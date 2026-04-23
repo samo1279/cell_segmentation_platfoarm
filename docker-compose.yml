@@ -6,15 +6,11 @@ services:
     environment:
       - GRADIO_SERVER_NAME=0.0.0.0
       - MODEL_URL=http://model:8000/segment
-      # Set MODEL_API_KEY to match the API_KEY in the model service.
+      # Must match API_KEY in the model service.
       - MODEL_API_KEY=
-      # Comma-separated user:password pairs for the Gradio login screen.
-      # Example: APP_USERS=admin:secret,viewer:readonly
-      # Leave blank for open dev access.
-      - APP_USERS=
-      # Set ADMIN_USER to the username that should see ALL history records (bypass per-user filter).
-      # Example: ADMIN_USER=admin
-      - ADMIN_USER=
+      # Username that sees ALL history records (admin bypass).
+      # Must match ADMIN_USER in the model service.
+      - ADMIN_USER=admin
     volumes:
       - images_volume:/data/images
       - results_volume:/data/results
@@ -41,6 +37,10 @@ services:
       - DATABASE_URL=postgresql://cellseg:cellseg@db:5432/cellseg
       # Set API_KEY to a secret value to enable authentication; leave blank for open dev access.
       - API_KEY=
+      # Admin account seeded at first startup.
+      # CHANGE ADMIN_PASSWORD before deploying — default is intentionally blank.
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=
     volumes:
       - images_volume:/data/images
       - results_volume:/data/results

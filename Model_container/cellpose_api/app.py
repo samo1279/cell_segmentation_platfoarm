@@ -1,11 +1,14 @@
 import asyncio
 import io
 import os
+import re
 import numpy as np
 import imageio.v3 as iio
+import bcrypt
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response, JSONResponse
+from pydantic import BaseModel
 from cellpose import models
 import logging
 import psycopg2
@@ -19,6 +22,26 @@ load_dotenv()
 USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
 DATABASE_URL = os.environ.get("DATABASE_URL")
 API_KEY: str | None = os.environ.get("API_KEY") or None
+
+# Admin account seeded at startup.
+# Set ADMIN_USER + ADMIN_PASSWORD in the environment before first launch.
+# The admin account is created once; changing the password env var does NOT
+# update an existing hash (use the /auth/register endpoint or psql directly).
+ADMIN_USER: str | None = os.environ.get("ADMIN_USER") or None
+ADMIN_PASSWORD: str | None = os.environ.get("ADMIN_PASSWORD") or None
+
+# ---------------------------------------------------------------------------
+# Pydantic request bodies for auth endpoints
+# ---------------------------------------------------------------------------
+
+class _AuthRegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
+class _AuthLoginRequest(BaseModel):
+    username: str
+    password: str
 
 _db_conn = None
 
@@ -93,6 +116,18 @@ async def lifespan(app: FastAPI):
     if conn:
         try:
             with conn.cursor() as cur:
+                # Users table — passwords are bcrypt-hashed, never stored in plain text
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id            SERIAL PRIMARY KEY,
+                        username      TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        is_admin      BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at    TIMESTAMPTZ DEFAULT NOW()
+                    )
+                    """
+                )
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS projects (
@@ -111,7 +146,23 @@ async def lifespan(app: FastAPI):
                 cur.execute(
                     "ALTER TABLE projects ADD COLUMN IF NOT EXISTS username TEXT"
                 )
-            logger.info("DB table 'projects' ready")
+            logger.info("DB tables ready")
+
+            # Seed admin account (once; existing hash is never overwritten)
+            if ADMIN_USER and ADMIN_PASSWORD:
+                pw_hash = bcrypt.hashpw(
+                    ADMIN_PASSWORD.encode(), bcrypt.gensalt()
+                ).decode()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO users (username, password_hash, is_admin)
+                        VALUES (%s, %s, TRUE)
+                        ON CONFLICT (username) DO NOTHING
+                        """,
+                        (ADMIN_USER, pw_hash),
+                    )
+                logger.info("Admin account '%s' ensured in DB", ADMIN_USER)
         except Exception as exc:
             logger.warning("DB table setup failed: %s", exc)
     else:
@@ -129,6 +180,95 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 MAX_DIMENSION = 8192
 ALLOWED_CONTENT_TYPES = {"image/png", "image/tiff", "image/tif", "image/jpeg", "image/jpg"}
 ALLOWED_EXTENSIONS = {".png", ".tiff", ".tif", ".jpeg", ".jpg"}
+
+# ---------------------------------------------------------------------------
+# Auth endpoints  — no API-key guard; called by the App Container auth flow
+# ---------------------------------------------------------------------------
+
+_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,50}$")
+
+
+@app.post("/auth/register")
+def auth_register(req: _AuthRegisterRequest):
+    """Create a new user account.
+
+    - Username: 3–50 characters, letters / digits / underscore only.
+    - Password: minimum 8 characters.
+    - Returns 400 if the username is taken or the input is invalid.
+    - Returns 503 when no database is configured.
+    """
+    if not _USERNAME_RE.match(req.username):
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be 3–50 characters (letters, digits, underscore only).",
+        )
+    if len(req.password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters.",
+        )
+
+    conn = _get_db_conn()
+    if conn is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database not configured. Set DATABASE_URL to enable user accounts.",
+        )
+
+    pw_hash = bcrypt.hashpw(req.password.encode(), bcrypt.gensalt()).decode()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, FALSE)",
+                (req.username, pw_hash),
+            )
+    except psycopg2.IntegrityError:
+        raise HTTPException(status_code=400, detail="Username is already taken.")
+    except Exception as exc:
+        logger.error("Registration DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error during registration.")
+
+    logger.info("New user registered: '%s'", req.username)
+    return {"message": f"Account '{req.username}' created. You can now log in."}
+
+
+@app.post("/auth/login")
+def auth_login(req: _AuthLoginRequest):
+    """Verify credentials.  Returns ``{"valid": bool, "is_admin": bool}``.
+
+    When no database is configured, falls back to the ADMIN_USER / ADMIN_PASSWORD
+    environment variables so the app remains usable in dev mode.
+    """
+    conn = _get_db_conn()
+
+    if conn is None:
+        # Dev-mode fallback: accept the env-var admin credentials
+        if (
+            ADMIN_USER
+            and ADMIN_PASSWORD
+            and req.username == ADMIN_USER
+            and req.password == ADMIN_PASSWORD
+        ):
+            return {"valid": True, "is_admin": True}
+        return {"valid": False, "is_admin": False}
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT password_hash, is_admin FROM users WHERE username = %s",
+                (req.username,),
+            )
+            row = cur.fetchone()
+    except Exception as exc:
+        logger.error("Login DB error: %s", exc)
+        return {"valid": False, "is_admin": False}
+
+    if not row:
+        return {"valid": False, "is_admin": False}
+
+    pw_hash, is_admin = row
+    valid = bcrypt.checkpw(req.password.encode(), pw_hash.encode())
+    return {"valid": bool(valid), "is_admin": bool(is_admin)}
 
 
 @app.get("/health")

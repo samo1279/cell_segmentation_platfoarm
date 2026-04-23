@@ -4,6 +4,33 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — DB-backed user authentication & self-registration (2026-04-23)
+
+### Added
+- `Model_container/requirements.txt` — `bcrypt` package for secure password hashing.
+- `Model_container/cellpose_api/app.py` — `users` table: `(id, username UNIQUE, password_hash, is_admin, created_at)`.
+- `Model_container/cellpose_api/app.py` — Admin account seeded at startup from `ADMIN_USER` + `ADMIN_PASSWORD` env vars (`ON CONFLICT DO NOTHING` — existing hash is never overwritten).
+- `Model_container/cellpose_api/app.py` — `POST /auth/register` (public, no API-key) — creates new user with bcrypt-hashed password; validates username (3–50 chars, alphanumeric/underscore) and password (≥ 8 chars); returns 400 on duplicate username.
+- `Model_container/cellpose_api/app.py` — `POST /auth/login` (public, no API-key) — verifies credentials against DB; falls back to `ADMIN_USER`/`ADMIN_PASSWORD` env vars when DB is unavailable (dev mode).
+- `App_container/requirements.txt` — `fastapi` and `uvicorn[standard]` added explicitly (previously only pulled in transitively by Gradio).
+- `App_container/app.py` — `MODEL_REGISTER_URL` and `MODEL_LOGIN_URL` environment-derived constants.
+- `App_container/app.py` — `_auth_fn(username, password) -> bool` Gradio auth callable; delegates to `/auth/login` instead of a static env-var list.
+- `App_container/app.py` — Registration Gradio Blocks mounted at `/register` (no auth required); users enter username, password, and confirmation — calls `/auth/register` and displays success/error feedback.
+- `App_container/app.py` — Both Gradio apps (`register_demo` at `/register`, `demo` at `/`) are mounted on a shared FastAPI instance and served via `uvicorn.run()` instead of `demo.launch()`.
+- `docker-compose.yml` — `ADMIN_USER=admin` and `ADMIN_PASSWORD=` added to the model service environment (operator must set a password before deploying).
+
+### Changed
+- `App_container/app.py` — Removed `APP_USERS` / `_AUTH_PAIRS` static env-var auth. Login is now fully DB-backed.
+- `App_container/app.py` — Launch mechanism changed from `gradio.Blocks.launch()` to `uvicorn.run()` to support multi-path mounting.
+- `docker-compose.yml` — App service env vars cleaned up: `APP_USERS` removed, `ADMIN_USER` documented against the model service value.
+
+### Security
+- Passwords stored exclusively as bcrypt hashes (never plain text).
+- Username format enforced by regex before DB insertion.
+- `/auth/register` and `/auth/login` are intentionally unauthenticated so the Gradio app can call them before the user has a session.
+
+---
+
 ## [Unreleased] — Per-user data isolation (Phase 4 completion)
 
 ### Added

@@ -6,3 +6,5 @@ matplotlib
 pandas
 imageio
 tifffile
+fastapi
+uvicorn[standard]

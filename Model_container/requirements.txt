@@ -7,3 +7,4 @@ imageio
 tifffile
 psycopg2-binary
 python-dotenv
+bcrypt

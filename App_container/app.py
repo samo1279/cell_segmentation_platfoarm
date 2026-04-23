@@ -12,24 +12,22 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from PIL import Image
+from fastapi import FastAPI
+import uvicorn
 
-MODEL_URL = os.getenv("MODEL_URL", "http://model:8000/segment")
-MODEL_PROJECTS_URL = os.getenv("MODEL_URL", "http://model:8000/segment").replace("/segment", "/projects")
+# ---------------------------------------------------------------------------
+# Environment configuration
+# ---------------------------------------------------------------------------
+
+_MODEL_BASE = os.getenv("MODEL_URL", "http://model:8000/segment").replace("/segment", "")
+MODEL_URL = f"{_MODEL_BASE}/segment"
+MODEL_PROJECTS_URL = f"{_MODEL_BASE}/projects"
+MODEL_REGISTER_URL = f"{_MODEL_BASE}/auth/register"
+MODEL_LOGIN_URL = f"{_MODEL_BASE}/auth/login"
+
 MODEL_API_KEY: str | None = os.getenv("MODEL_API_KEY") or None
 # ADMIN_USER — if set, this username bypasses the per-user history filter and sees all records.
 ADMIN_USER: str | None = os.getenv("ADMIN_USER") or None
-
-# APP_USERS — comma-separated "user:password" pairs for the Gradio login screen.
-# Example: APP_USERS=admin:secret,viewer:readonly
-# Leave blank (default) to run without authentication (open dev mode).
-_RAW_USERS = os.getenv("APP_USERS", "")
-_AUTH_PAIRS: list[tuple[str, str]] | None = None
-if _RAW_USERS.strip():
-    _AUTH_PAIRS = []
-    for entry in _RAW_USERS.split(","):
-        parts = entry.strip().split(":", 1)
-        if len(parts) == 2:
-            _AUTH_PAIRS.append((parts[0].strip(), parts[1].strip()))
 
 # Tracks temp files from the previous call so they can be deleted at the start
 # of the next call (after Gradio has already served them to the browser).
@@ -37,6 +35,29 @@ _pending_cleanup: list[str] = []
 _pending_batch_cleanup: list[str] = []
 
 _MODEL_TIMEOUT = httpx.Timeout(connect=10.0, write=60.0, read=900.0, pool=10.0)
+
+# ---------------------------------------------------------------------------
+# DB-backed Gradio auth callable
+# ---------------------------------------------------------------------------
+
+def _auth_fn(username: str, password: str) -> bool:
+    """Called by Gradio for every login attempt.
+
+    Delegates credential verification to the Model Container's /auth/login
+    endpoint, which checks the bcrypt hash stored in PostgreSQL.
+    Returns True to allow login, False to reject.
+    """
+    try:
+        resp = httpx.post(
+            MODEL_LOGIN_URL,
+            json={"username": username, "password": password},
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+        )
+        if resp.status_code == 200:
+            return bool(resp.json().get("valid", False))
+    except Exception:
+        pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -647,11 +668,86 @@ with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
             )
 
 demo.queue()
-demo.launch(
-    server_name="0.0.0.0",
-    server_port=8001,
-    # Gradio login screen — only active when APP_USERS env var is set.
-    # Leave APP_USERS blank for open/dev access.
-    auth=_AUTH_PAIRS if _AUTH_PAIRS else None,
-    auth_message="Cell Segmentation Platform — please log in.",
+
+# ---------------------------------------------------------------------------
+# Registration page  — public, no auth required
+# Mounted at /register so new users can create accounts before logging in.
+# ---------------------------------------------------------------------------
+
+def _do_register(username: str, password: str, confirm: str) -> str:
+    if not username.strip() or not password:
+        return "**Error:** All fields are required."
+    if password != confirm:
+        return "**Error:** Passwords do not match."
+    try:
+        resp = httpx.post(
+            MODEL_REGISTER_URL,
+            json={"username": username.strip(), "password": password},
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+        )
+        if resp.status_code == 200:
+            return (
+                f"**Account created!**  "
+                f"Welcome, **{username.strip()}**. "
+                f"You can now [log in](/) with your new credentials."
+            )
+        detail = resp.json().get("detail", "Registration failed.")
+        return f"**Error:** {detail}"
+    except Exception:
+        return "**Error:** Could not reach the authentication server. Please try again later."
+
+
+with gr.Blocks(title="Register — Cell Segmentation Platform") as register_demo:
+    gr.Markdown(
+        "# Cell Segmentation Platform\n"
+        "## Create a new account\n"
+        "Already have an account? **[Go to login page](/)**"
+    )
+    with gr.Column(min_width=420):
+        reg_username = gr.Textbox(
+            label="Username",
+            placeholder="3–50 characters — letters, digits, underscore",
+            max_lines=1,
+        )
+        reg_password = gr.Textbox(
+            label="Password",
+            type="password",
+            placeholder="Minimum 8 characters",
+            max_lines=1,
+        )
+        reg_confirm = gr.Textbox(
+            label="Confirm password",
+            type="password",
+            max_lines=1,
+        )
+        reg_btn = gr.Button("Create account", variant="primary")
+        reg_status = gr.Markdown("")
+
+    reg_btn.click(
+        fn=_do_register,
+        inputs=[reg_username, reg_password, reg_confirm],
+        outputs=[reg_status],
+    )
+
+# ---------------------------------------------------------------------------
+# Mount both Gradio apps on a shared FastAPI instance and launch with uvicorn
+# ---------------------------------------------------------------------------
+# URL layout:
+#   http://localhost:8001/          — login-protected main application
+#   http://localhost:8001/register  — public registration page
+
+_fastapi_app = FastAPI()
+_fastapi_app = gr.mount_gradio_app(_fastapi_app, register_demo, path="/register")
+_fastapi_app = gr.mount_gradio_app(
+    _fastapi_app,
+    demo,
+    path="/",
+    auth=_auth_fn,
+    auth_message=(
+        "Cell Segmentation Platform — please log in.\n"
+        "New user? Visit /register to create an account."
+    ),
 )
+
+if __name__ == "__main__":
+    uvicorn.run(_fastapi_app, host="0.0.0.0", port=8001)
