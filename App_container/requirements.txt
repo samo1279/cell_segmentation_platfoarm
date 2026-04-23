@@ -4,3 +4,5 @@ numpy
 Pillow
 matplotlib
 pandas
+imageio
+tifffile

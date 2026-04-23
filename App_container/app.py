@@ -5,6 +5,7 @@ import tempfile
 import time
 import zipfile
 import numpy as np
+import imageio.v3 as iio
 import httpx
 import gradio as gr
 import matplotlib
@@ -14,6 +15,19 @@ from PIL import Image
 
 MODEL_URL = os.getenv("MODEL_URL", "http://model:8000/segment")
 MODEL_PROJECTS_URL = os.getenv("MODEL_URL", "http://model:8000/segment").replace("/segment", "/projects")
+MODEL_API_KEY: str | None = os.getenv("MODEL_API_KEY") or None
+
+# APP_USERS — comma-separated "user:password" pairs for the Gradio login screen.
+# Example: APP_USERS=admin:secret,viewer:readonly
+# Leave blank (default) to run without authentication (open dev mode).
+_RAW_USERS = os.getenv("APP_USERS", "")
+_AUTH_PAIRS: list[tuple[str, str]] | None = None
+if _RAW_USERS.strip():
+    _AUTH_PAIRS = []
+    for entry in _RAW_USERS.split(","):
+        parts = entry.strip().split(":", 1)
+        if len(parts) == 2:
+            _AUTH_PAIRS.append((parts[0].strip(), parts[1].strip()))
 
 # Tracks temp files from the previous call so they can be deleted at the start
 # of the next call (after Gradio has already served them to the browser).
@@ -43,10 +57,12 @@ def _call_model(image_bytes: bytes, diameter, flow_threshold, cellprob_threshold
     }
     if diameter > 0:
         form_data["diameter"] = diameter
+    headers = {"X-API-Key": MODEL_API_KEY} if MODEL_API_KEY else {}
     resp = httpx.post(
         MODEL_URL,
         files={"image": ("image.png", image_bytes, "image/png")},
         data=form_data,
+        headers=headers,
         timeout=_MODEL_TIMEOUT,
     )
     resp.raise_for_status()
@@ -177,10 +193,12 @@ def _call_model_raw(raw_bytes: bytes, filename: str, mime: str, diameter, flow_t
     }
     if diameter > 0:
         form_data["diameter"] = diameter
+    headers = {"X-API-Key": MODEL_API_KEY} if MODEL_API_KEY else {}
     resp = httpx.post(
         MODEL_URL,
         files={"image": (filename, raw_bytes, mime)},
         data=form_data,
+        headers=headers,
         timeout=_MODEL_TIMEOUT,
     )
     resp.raise_for_status()
@@ -207,7 +225,15 @@ def _render_zstack_slice(masks: np.ndarray, tiff_path: str, z_idx: int, model_na
     else:
         frame_rgb = frame
 
-    overlay_uint8 = _render_overlay(frame_rgb.astype(np.uint8), slice_masks, opacity)
+    # Normalize to uint8 — handles 16-bit (uint16) microscopy TIFFs where values
+    # can be 0-65535. Without normalization the image appears completely black.
+    frame_rgb = frame_rgb.astype(np.float32)
+    fmin, fmax = frame_rgb.min(), frame_rgb.max()
+    if fmax > fmin:
+        frame_rgb = (frame_rgb - fmin) / (fmax - fmin) * 255.0
+    frame_uint8 = frame_rgb.astype(np.uint8)
+
+    overlay_uint8 = _render_overlay(frame_uint8, slice_masks, opacity)
     cell_count = int(len(np.unique(slice_masks)) - 1)
 
     ov_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
@@ -290,14 +316,12 @@ def export_csv(stats_df):
 # ---------------------------------------------------------------------------
 
 def load_history():
-    """Fetch past segmentation jobs from GET /projects.
-
-    Returns a list of rows [ID, image name, model, cell count, timestamp].
-    Returns an empty list if the endpoint is unreachable or returns an error.
-    """
+    """Fetch past segmentation jobs from GET /projects."""
     try:
+        headers = {"X-API-Key": MODEL_API_KEY} if MODEL_API_KEY else {}
         resp = httpx.get(
             MODEL_PROJECTS_URL,
+            headers=headers,
             timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
         )
         resp.raise_for_status()
@@ -602,4 +626,11 @@ with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
             )
 
 demo.queue()
-demo.launch(server_name="0.0.0.0", server_port=8001)
+demo.launch(
+    server_name="0.0.0.0",
+    server_port=8001,
+    # Gradio login screen — only active when APP_USERS env var is set.
+    # Leave APP_USERS blank for open/dev access.
+    auth=_AUTH_PAIRS if _AUTH_PAIRS else None,
+    auth_message="Cell Segmentation Platform — please log in.",
+)
