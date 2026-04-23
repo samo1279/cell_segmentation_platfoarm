@@ -12,8 +12,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from PIL import Image
-from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
 # ---------------------------------------------------------------------------
@@ -671,84 +671,112 @@ with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
 demo.queue()
 
 # ---------------------------------------------------------------------------
-# Registration page  — public, no auth required
-# Mounted at /register so new users can create accounts before logging in.
+# Registration page — plain HTML served by FastAPI (no Gradio subpath needed)
+# FastAPI routes are checked BEFORE the Gradio mount, so /register and
+# /auth/register are never intercepted by the Gradio app at /.
 # ---------------------------------------------------------------------------
 
-def _do_register(username: str, password: str, confirm: str) -> str:
-    if not username.strip() or not password:
-        return "**Error:** All fields are required."
-    if password != confirm:
-        return "**Error:** Passwords do not match."
-    try:
-        resp = httpx.post(
-            MODEL_REGISTER_URL,
-            json={"username": username.strip(), "password": password},
-            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
-        )
-        if resp.status_code == 200:
-            return (
-                f"**Account created!**  "
-                f"Welcome, **{username.strip()}**. "
-                f"You can now [log in](/) with your new credentials."
-            )
-        detail = resp.json().get("detail", "Registration failed.")
-        return f"**Error:** {detail}"
-    except Exception:
-        return "**Error:** Could not reach the authentication server. Please try again later."
-
-
-with gr.Blocks(title="Register — Cell Segmentation Platform") as register_demo:
-    gr.Markdown(
-        "# Cell Segmentation Platform\n"
-        "## Create a new account\n"
-        "Already have an account? **[Go to login page](/)**"
-    )
-    with gr.Column(min_width=420):
-        reg_username = gr.Textbox(
-            label="Username",
-            placeholder="3–50 characters — letters, digits, underscore",
-            max_lines=1,
-        )
-        reg_password = gr.Textbox(
-            label="Password",
-            type="password",
-            placeholder="Minimum 8 characters",
-            max_lines=1,
-        )
-        reg_confirm = gr.Textbox(
-            label="Confirm password",
-            type="password",
-            max_lines=1,
-        )
-        reg_btn = gr.Button("Create account", variant="primary")
-        reg_status = gr.Markdown("")
-
-    reg_btn.click(
-        fn=_do_register,
-        inputs=[reg_username, reg_password, reg_confirm],
-        outputs=[reg_status],
-    )
+_REGISTER_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Register — Cell Segmentation Platform</title>
+  <style>
+    body{font-family:system-ui,sans-serif;max-width:420px;margin:80px auto;padding:0 20px;color:#111}
+    h1{font-size:1.3em;margin-bottom:0}
+    h2{font-size:1em;font-weight:normal;color:#555;margin-top:4px}
+    label{display:block;margin-top:14px;font-size:.9em;font-weight:600}
+    input{width:100%;padding:8px 10px;margin-top:4px;border:1px solid #ccc;
+          border-radius:6px;box-sizing:border-box;font-size:1em}
+    button{margin-top:20px;width:100%;padding:10px;background:#f97316;
+           color:#fff;border:none;border-radius:6px;font-size:1em;cursor:pointer}
+    button:hover{background:#ea6c08}
+    #msg{margin-top:14px;padding:10px 14px;border-radius:6px;display:none;font-size:.95em}
+    .ok{background:#d1fae5;color:#065f46}
+    .err{background:#fee2e2;color:#991b1b}
+    a{color:#f97316}
+  </style>
+</head>
+<body>
+  <h1>Cell Segmentation Platform</h1>
+  <h2>Create a new account</h2>
+  <p style="font-size:.9em">Already have an account? <a href="/">Log in</a></p>
+  <form id="frm">
+    <label>Username</label>
+    <input id="u" type="text" placeholder="3–50 chars — letters, digits, underscore" required>
+    <label>Password</label>
+    <input id="p" type="password" placeholder="Minimum 8 characters" required>
+    <label>Confirm password</label>
+    <input id="c" type="password" required>
+    <button type="submit">Create account</button>
+  </form>
+  <div id="msg"></div>
+  <script>
+    document.getElementById('frm').addEventListener('submit', async function(e){
+      e.preventDefault();
+      const u=document.getElementById('u').value.trim();
+      const p=document.getElementById('p').value;
+      const c=document.getElementById('c').value;
+      if(p!==c){show('Passwords do not match.',false);return;}
+      const r=await fetch('/auth/register',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({username:u,password:p})
+      });
+      const d=await r.json();
+      if(r.ok){show((d.message||'Account created!')+' — <a href="/">Go to login</a>',true);this.reset();}
+      else{show(d.detail||'Registration failed.',false);}
+    });
+    function show(t,ok){
+      const el=document.getElementById('msg');
+      el.innerHTML=t;el.className=ok?'ok':'err';el.style.display='block';
+    }
+  </script>
+</body>
+</html>
+"""
 
 # ---------------------------------------------------------------------------
-# Mount both Gradio apps on a shared FastAPI instance and launch with uvicorn
+# FastAPI app — /register and /auth/register are declared BEFORE the Gradio
+# mount so they are matched first and never swallowed by Gradio's / prefix.
 # ---------------------------------------------------------------------------
-# URL layout:
-#   http://localhost:8001/          — redirects to /app
-#   http://localhost:8001/app       — login-protected main application
-#   http://localhost:8001/register  — public registration page
 
 _fastapi_app = FastAPI()
 
-@_fastapi_app.get("/")
-def _root_redirect():
-    return RedirectResponse(url="/app")
 
-_fastapi_app = gr.mount_gradio_app(_fastapi_app, register_demo, path="/register")
+@_fastapi_app.get("/register", response_class=HTMLResponse)
+def _register_page():
+    """Serve the self-registration HTML form (public, no login required)."""
+    return _REGISTER_HTML
+
+
+@_fastapi_app.post("/auth/register")
+async def _auth_register_proxy(request: Request):
+    """Forward registration request to the Model Container's /auth/register."""
+    try:
+        body = await request.json()
+        resp = httpx.post(
+            MODEL_REGISTER_URL,
+            json=body,
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception:
+        return JSONResponse(
+            content={"detail": "Could not reach the authentication server. Please try again later."},
+            status_code=503,
+        )
+
+
+# Mount the main Gradio app at / AFTER the above routes so FastAPI checks
+# /register and /auth/register first.  This also means Gradio file serving
+# (/file=...) continues to work from the root path as before.
 _fastapi_app = gr.mount_gradio_app(
     _fastapi_app,
     demo,
-    path="/app",
+    path="/",
     auth=_auth_fn,
     auth_message=(
         "Cell Segmentation Platform — please log in.\n"
