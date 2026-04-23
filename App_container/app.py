@@ -13,6 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from PIL import Image
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 import uvicorn
 
 # ---------------------------------------------------------------------------
@@ -733,15 +734,21 @@ with gr.Blocks(title="Register — Cell Segmentation Platform") as register_demo
 # Mount both Gradio apps on a shared FastAPI instance and launch with uvicorn
 # ---------------------------------------------------------------------------
 # URL layout:
-#   http://localhost:8001/          — login-protected main application
+#   http://localhost:8001/          — redirects to /app
+#   http://localhost:8001/app       — login-protected main application
 #   http://localhost:8001/register  — public registration page
 
 _fastapi_app = FastAPI()
+
+@_fastapi_app.get("/")
+def _root_redirect():
+    return RedirectResponse(url="/app")
+
 _fastapi_app = gr.mount_gradio_app(_fastapi_app, register_demo, path="/register")
 _fastapi_app = gr.mount_gradio_app(
     _fastapi_app,
     demo,
-    path="/",
+    path="/app",
     auth=_auth_fn,
     auth_message=(
         "Cell Segmentation Platform — please log in.\n"

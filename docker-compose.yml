@@ -40,7 +40,7 @@ services:
       # Admin account seeded at first startup.
       # CHANGE ADMIN_PASSWORD before deploying — default is intentionally blank.
       - ADMIN_USER=admin
-      - ADMIN_PASSWORD=
+      - ADMIN_PASSWORD= Ostfalia2025
     volumes:
       - images_volume:/data/images
       - results_volume:/data/results
