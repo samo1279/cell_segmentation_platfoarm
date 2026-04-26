@@ -28,18 +28,30 @@ spec:
               value: "http://{{ .Release.Name }}-model:8000/segment"
           resources:
             {{- toYaml .Values.app.resources | nindent 12 }}
-          livenessProbe:
-            httpGet:
-              path: /
-              port: {{ .Values.app.port }}
-            initialDelaySeconds: 10
-            periodSeconds: 15
-          readinessProbe:
+          # startupProbe prevents liveness from firing while Gradio loads (can take 30-60s).
+          # 20 attempts × 5s = 100s max startup window.
+          startupProbe:
             httpGet:
               path: /
               port: {{ .Values.app.port }}
             initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 20
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.app.port }}
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.app.port }}
             periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 3
 ---
 # --- Model Container Deployment (FastAPI + Cellpose) ---
 apiVersion: apps/v1
@@ -149,8 +161,16 @@ spec:
       containers:
         - name: postgres
           image: {{ .Values.db.image }}
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ .Values.db.port }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           env:
             - name: POSTGRES_DB
               value: {{ .Values.db.name | quote }}

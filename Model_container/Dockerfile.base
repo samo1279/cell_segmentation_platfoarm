@@ -1,0 +1,33 @@
+# Base image: heavy dependencies + model weights baked in.
+# This image is ONLY rebuilt when requirements.txt or model weights change.
+# It is tagged as :stable and reused by every code commit — so the GPU node
+# keeps it cached and code-only deploys pull just a few MB of diff.
+#
+# Build manually (or via the build-model-base CI job) and push once:
+#   kaniko ... --dockerfile Dockerfile.base --destination .../cellpose-poc-model-base:stable
+
+FROM python:3.11-slim
+
+ARG USE_CUDA=false
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+
+# Install all dependencies (cellpose pulls in CPU torch as a transitive dep).
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Forcibly reinstall torch + torchvision from the CUDA index when USE_CUDA=true.
+# torchvision must be reinstalled alongside torch to ensure matched CUDA versions.
+RUN if [ "$USE_CUDA" = "true" ]; then \
+      pip install --no-cache-dir --force-reinstall torch torchvision \
+        --index-url https://download.pytorch.org/whl/cu121; \
+    fi
+
+# Pre-download both model weights so they are baked into the base image.
+# gpu=False: Docker build never has GPU access; weights are device-independent.
+RUN python -c "from cellpose import models; models.CellposeModel(gpu=False, pretrained_model='cyto3'); print('cyto3 weights downloaded'); models.CellposeModel(gpu=False, pretrained_model='cpsam'); print('cpsam weights downloaded')"
