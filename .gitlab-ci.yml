@@ -66,7 +66,7 @@ build-model:
     - /kaniko/executor
       --context "${CI_PROJECT_DIR}/Model_container"
       --dockerfile "${CI_PROJECT_DIR}/Model_container/Dockerfile"
-      --build-arg USE_CUDA=true
+      --build-arg BASE_IMAGE=${PUSH_REGISTRY}/${APP_NAME}-model-base:stable
       --destination "${PUSH_REGISTRY}/${APP_NAME}-model:${IMAGE_TAG}"
       --insecure
 

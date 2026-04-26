@@ -1,7 +1,9 @@
 # Code-only layer — built every commit, pulls in seconds.
 # The heavy base (CUDA torch + weights) is in Dockerfile.base, tagged :stable.
 # The GPU node already has :stable cached, so only this thin diff is transferred.
-ARG BASE_IMAGE=localhost:32000/cellpose-poc-model-base:stable
+# BASE_IMAGE must be passed as --build-arg from CI using PUSH_REGISTRY (node IP).
+# localhost:32000 is NOT a valid default for Kaniko (localhost = the pod, not the node).
+ARG BASE_IMAGE=10.136.94.110:32000/cellpose-poc-model-base:stable
 FROM ${BASE_IMAGE}
 
 # Re-copy only the application source — everything else is inherited from base.
