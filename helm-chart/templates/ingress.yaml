@@ -4,6 +4,12 @@ metadata:
   name: {{ .Release.Name }}-ingress
   annotations:
     cert-manager.io/cluster-issuer: ca-issuer
+    # nginx default body limit is 1 MB — raises 413 for any image upload larger than that.
+    # Set to 55 MB (5 MB above the 50 MB app-level cap) so nginx never blocks before Gradio.
+    nginx.ingress.kubernetes.io/proxy-body-size: "55m"
+    # Raise proxy timeouts to handle long-running Cellpose inference (CPU can take ~15 min).
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
 spec:
   ingressClassName: public
   tls:
