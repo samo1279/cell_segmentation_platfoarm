@@ -87,7 +87,7 @@ deploy:
       --namespace ${APP_NAME}
       --create-namespace
       --wait
-      --timeout 10m0s
+      --timeout 25m0s
   only:
     - main
 
@@ -128,11 +128,11 @@ verify:
     - echo "===== 8. IMAGE PULL STATUS (are new images actually running?) ====="
     - kubectl get pods -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{" image="}{.status.containerStatuses[0].image}{" state="}{.status.containerStatuses[0].state}{"\n"}{end}'
 
-    - echo "===== 9. WAIT FOR MODEL READY (up to 3 min) ====="
+    - echo "===== 9. WAIT FOR MODEL READY (up to 15 min) ====="
     - |
-      for i in $(seq 1 18); do
+      for i in $(seq 1 90); do
         STATUS=$(kubectl get pod -n "$NS" -l "app=${APP_NAME}-model" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "unknown")
-        echo "attempt $i/18 — model ready=$STATUS"
+        echo "attempt $i/90 — model ready=$STATUS"
         if [ "$STATUS" = "true" ]; then
           echo "Model is ready!"
           break

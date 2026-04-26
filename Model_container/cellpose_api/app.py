@@ -4,6 +4,7 @@ import os
 import re
 import numpy as np
 import imageio.v3 as iio
+import tifffile
 import bcrypt
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, UploadFile, File, Form, HTTPException
@@ -369,14 +370,16 @@ async def segment(
     # Multi-frame TIFFs are segmented slice-by-slice; results stacked as (Z, H, W).
     # Single-frame images fall through to standard 2-D inference.
     is_zstack = False
+    n_frames = 1
     try:
-        props = iio.improps(io.BytesIO(data))
-        is_zstack = props.n_frames is not None and props.n_frames > 1
+        with tifffile.TiffFile(io.BytesIO(data)) as tif:
+            n_frames = len(tif.pages)
+            is_zstack = n_frames > 1
     except Exception:
         pass
 
     if is_zstack:
-        logger.info(f"3-D z-stack detected: {props.n_frames} frames")
+        logger.info(f"3-D z-stack detected: {n_frames} frames")
 
     # --- Segmentation ---
     channel_axis = None if img.ndim == 2 else 2
@@ -394,7 +397,7 @@ async def segment(
 
     def _run_inference():
         if is_zstack:
-            frames = iio.imread(io.BytesIO(data))
+            frames = tifffile.imread(io.BytesIO(data))  # reads all frames correctly
             slices = [_run_2d(frames[i]) for i in range(frames.shape[0])]
             return np.stack(slices, axis=0)  # (Z, H, W)
         else:

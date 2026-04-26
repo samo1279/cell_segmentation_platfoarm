@@ -15,6 +15,7 @@ import logging
 
 import numpy as np
 import imageio.v3 as iio
+import tifffile
 from celery import Celery
 from cellpose import models
 
@@ -89,15 +90,15 @@ def run_segmentation(
     polling endpoint can return it as ``application/octet-stream``.
     """
     selected_model = _get_task_model(model_type)
-    img = iio.imread(io.BytesIO(image_bytes))
+    img = tifffile.imread(io.BytesIO(image_bytes))  # reads all frames correctly
 
     # ------------------------------------------------------------------
     # 3-D z-stack detection
     # ------------------------------------------------------------------
     is_zstack = False
     try:
-        props = iio.improps(io.BytesIO(image_bytes))
-        is_zstack = props.n_frames is not None and props.n_frames > 1
+        with tifffile.TiffFile(io.BytesIO(image_bytes)) as tif:
+            is_zstack = len(tif.pages) > 1
     except Exception:
         pass  # fall back to 2-D path
 
