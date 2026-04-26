@@ -4,6 +4,13 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Fix HTTP 413 on large image uploads (2026-04-26)
+
+### Fixed
+- `App_container/app.py` — added `max_file_size="50mb"` to `gr.Blocks()` to align Gradio's upload gate with the backend's 50 MB validation; previously Gradio's default (~10 MB) rejected valid microscopy images before the Python callback was reached.
+
+---
+
 ## [Unreleased] — DB-backed user authentication & self-registration (2026-04-23)
 
 ### Added
