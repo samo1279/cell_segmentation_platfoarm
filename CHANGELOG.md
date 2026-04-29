@@ -4,6 +4,21 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Fix all build failures and align with official standards (2026-04-29)
+
+### Fixed
+- `Model_container/Dockerfile` — replaced two-layer build (BASE_IMAGE + missing Dockerfile.base) with self-contained single-stage build following official Docker best practices; `ARG USE_CUDA=false` default enables local CPU builds; `USE_CUDA=true` swaps CUDA 12.1 wheels for server GPU builds; pre-downloads cyto3 and cpsam model weights at build time; removed hardcoded private IP `10.136.94.110:32000`
+- `.gitlab-ci.yml` — replaced `--build-arg BASE_IMAGE=...` with `--build-arg USE_CUDA=true` matching Dockerfile specification and compose.yaml pattern
+- `helm-chart/values.yaml` — added `admin.username` and `admin.password` configuration matching `compose.yaml` and `.env.example` documentation
+- `helm-chart/templates/deployment.yaml` — added `ADMIN_USER` and `ADMIN_PASSWORD` environment variables to model container enabling admin account seeding on Kubernetes deployment
+
+### Added
+- `document/ARCHITECTURE_REVIEW.md` — comprehensive analysis documenting all build problems, root causes, and solutions with official Docker/Kubernetes/Gradio documentation references
+
+**Impact:** System can now build locally (`docker compose up --build`), in CI pipeline, and deploy to Kubernetes with consistent configuration across all environments.
+
+---
+
 ## [Unreleased] — Fix fastremap import error (2026-04-29)
 
 ### Fixed
