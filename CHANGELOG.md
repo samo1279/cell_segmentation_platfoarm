@@ -4,6 +4,18 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Fix Helm context deadline exceeded on large image deploy (2026-04-29)
+
+### Fixed
+- `.gitlab-ci.yml` — root cause: Helm `--wait` timeout included the 15-25 min cold pull of the 6.8 GB model image; the Kubernetes client rate-limiter context expired mid-poll causing `client rate limiter Wait returned an error: context deadline exceeded`
+- Added `pre-pull-model` job in the deploy stage that creates a temporary pod on the GPU node, waits up to 40 min for the image to be fully cached in containerd, then deletes the pod; `deploy` job (`needs: [pre-pull-model]`) now runs after image is on disk — Helm `--wait` only covers actual pod startup (~90 s), not image transfer
+- Reduced Helm `--timeout` back to `10m0s` (sufficient now that image pull is separated)
+
+### Added
+- `build-model` and `build-app` Kaniko jobs now push a second `--destination ...model:latest` tag alongside the SHA tag; on subsequent deploys the GPU node reuses all heavy layers (apt, pip, CUDA torch, 2.6 GB weights) from the previous `latest` pull — only the thin `COPY app.py` layer (~30 KB) is transferred; pull time drops from 15-25 min → under 5 seconds after the first cold deploy
+
+---
+
 ## [Unreleased] — Kaniko layer caching — standard fix for slow CI builds (2026-04-29)
 
 ### Changed

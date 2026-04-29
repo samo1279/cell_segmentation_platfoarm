@@ -51,6 +51,7 @@ build-app:
       --context "${CI_PROJECT_DIR}/App_container"
       --dockerfile "${CI_PROJECT_DIR}/App_container/Dockerfile"
       --destination "${PUSH_REGISTRY}/${APP_NAME}-app:${IMAGE_TAG}"
+      --destination "${PUSH_REGISTRY}/${APP_NAME}-app:latest"
       --cache=true
       --cache-repo "${PUSH_REGISTRY}/${APP_NAME}-app-cache"
       --insecure
@@ -71,10 +72,86 @@ build-model:
       --dockerfile "${CI_PROJECT_DIR}/Model_container/Dockerfile"
       --build-arg USE_CUDA=true
       --destination "${PUSH_REGISTRY}/${APP_NAME}-model:${IMAGE_TAG}"
+      --destination "${PUSH_REGISTRY}/${APP_NAME}-model:latest"
       --cache=true
       --cache-repo "${PUSH_REGISTRY}/${APP_NAME}-model-cache"
       --insecure
       --insecure-pull
+
+# Pre-pull the large model image (~6.8 GB) onto the GPU node BEFORE Helm deploys.
+#
+# WHY THIS JOB EXISTS:
+#   The model image contains CUDA PyTorch + Cellpose weights baked in.
+#   On a cold pull (new layers never seen by the GPU node), downloading 6.8 GB
+#   takes 15-25 minutes. Helm's --wait timeout includes this pull time.
+#   When the pull alone exceeds the timeout, Helm fails with:
+#     "client rate limiter Wait returned an error: context deadline exceeded"
+#   This job runs a temporary pod that forces containerd to cache all image
+#   layers on the GPU node. Helm's --wait then only covers actual startup time
+#   (model loading: ~60-90 s), not image transfer.
+#
+# SUBSEQUENT DEPLOYS:
+#   After the first cold pull, containerd keeps all layer tarballs on disk.
+#   The next deploy pushes only a new SHA tag — the heavy layers (pip, torch,
+#   weights) have the same content-hash digests and are NOT re-downloaded.
+#   Only the tiny COPY app.py layer (~30 KB) changes. Pull time: < 5 seconds.
+pre-pull-model:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  tags:
+    - a40gpu
+  needs: [build-app, build-model]
+  script:
+    # Ensure namespace exists before creating the pre-pull pod
+    - kubectl create namespace ${APP_NAME} --dry-run=client -o yaml | kubectl apply -f -
+
+    # Remove any stale pre-pull pod from a previous failed run
+    - kubectl delete pod pre-pull-model -n ${APP_NAME} --ignore-not-found=true
+
+    # Write the pod manifest to a temp file (avoids heredoc quoting issues)
+    - |
+      cat > /tmp/pre-pull-pod.yaml <<EOF
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: pre-pull-model
+        namespace: ${APP_NAME}
+      spec:
+        nodeSelector:
+          nvidia.com/gpu.present: "true"
+        tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+        restartPolicy: Never
+        containers:
+          - name: pull
+            image: ${PULL_REGISTRY}/${APP_NAME}-model:${IMAGE_TAG}
+            command: ["sh", "-c", "echo 'Model image pulled and cached on GPU node'"]
+            resources: {}
+      EOF
+    - kubectl apply -f /tmp/pre-pull-pod.yaml
+
+    # Poll until the pod is no longer Pending.
+    # Pending → image is still downloading.  Any other phase → layers are on disk.
+    # Allow up to 40 min (240 x 10 s) for the cold first pull.
+    - |
+      echo "Waiting for model image to be cached on GPU node..."
+      for i in $(seq 1 240); do
+        PHASE=$(kubectl get pod pre-pull-model -n ${APP_NAME} \
+          -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
+        echo "  attempt ${i}/240 — pod phase: ${PHASE}"
+        case "${PHASE}" in
+          Succeeded) echo "Image cached successfully. Proceeding to deploy."; break ;;
+          Failed)    echo "WARNING: pre-pull pod failed. Layers may be partial. Continuing anyway."; break ;;
+        esac
+        sleep 10
+      done
+
+    # Clean up the temporary pod
+    - kubectl delete pod pre-pull-model -n ${APP_NAME} --ignore-not-found=true
+  only:
+    - main
 
 # Deploy both containers via Helm (only on main branch)
 deploy:
@@ -82,7 +159,7 @@ deploy:
   image: alpine/helm:3.14.0
   tags:
     - a40gpu
-  needs: [build-app, build-model]
+  needs: [pre-pull-model]
   script:
     - helm upgrade --install ${APP_NAME} ./helm-chart
       --set app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
@@ -93,7 +170,7 @@ deploy:
       --namespace ${APP_NAME}
       --create-namespace
       --wait
-      --timeout 20m0s
+      --timeout 10m0s
   only:
     - main
 
