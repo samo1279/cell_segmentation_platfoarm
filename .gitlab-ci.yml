@@ -56,7 +56,11 @@ build-app:
       --insecure
       --insecure-pull
 
-# Build the FastAPI / Cellpose Model Container image
+# Build the FastAPI / Cellpose Model Container image.
+# The image is tagged with a SHA256 hash of the Model_container/ source files
+# (excluding tests).  If model files do not change between commits, the hash
+# stays the same → the GPU node already has the tag → imagePullPolicy:
+# IfNotPresent skips the 6.8 GB pull entirely.
 build-model:
   stage: build
   image:
@@ -66,18 +70,28 @@ build-model:
     - a40gpu
   needs: [unit-test-model]
   script:
+    # Compute a stable content hash from model source files only (not tests).
+    - MODEL_HASH=$(find ${CI_PROJECT_DIR}/Model_container -type f -not -path '*/tests/*' | sort | xargs sha256sum | sha256sum | cut -c1-12)
+    - echo "MODEL_TAG=model-${MODEL_HASH}" > model_tag.env
+    - echo "Building model image with tag model-${MODEL_HASH}"
     - /kaniko/executor
       --context "${CI_PROJECT_DIR}/Model_container"
       --dockerfile "${CI_PROJECT_DIR}/Model_container/Dockerfile"
       --build-arg USE_CUDA=true
-      --destination "${PUSH_REGISTRY}/${APP_NAME}-model:${IMAGE_TAG}"
+      --destination "${PUSH_REGISTRY}/${APP_NAME}-model:model-${MODEL_HASH}"
       --cache=true
       --cache-repo "${PUSH_REGISTRY}/${APP_NAME}-model-cache"
       --insecure
       --insecure-pull
+  artifacts:
+    reports:
+      dotenv: model_tag.env
+    expire_in: 1 hour
 
 # Deploy both containers via Helm (only on main branch).
-# 30 m timeout covers a cold pull of the 6-GB model image on the GPU node.
+# App image uses commit SHA (changes every push).
+# Model image uses content hash (unchanged unless model files changed) so
+# the GPU node never re-pulls the 6.8 GB image unless necessary.
 deploy:
   stage: deploy
   image: alpine/helm:3.14.0
@@ -85,11 +99,12 @@ deploy:
     - a40gpu
   needs: [build-app, build-model]
   script:
+    - echo "Deploying app:${IMAGE_TAG}  model:${MODEL_TAG}"
     - helm upgrade --install ${APP_NAME} ./helm-chart
       --set app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
       --set app.image.tag=${IMAGE_TAG}
       --set model.image.repository=${PULL_REGISTRY}/${APP_NAME}-model
-      --set model.image.tag=${IMAGE_TAG}
+      --set model.image.tag=${MODEL_TAG}
       --set ingress.host=${APP_DOMAIN}
       --namespace ${APP_NAME}
       --create-namespace
