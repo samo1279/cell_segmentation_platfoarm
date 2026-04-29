@@ -76,75 +76,14 @@ build-model:
       --insecure
       --insecure-pull
 
-# Pre-pull the large model image onto the GPU node using a Kubernetes Job.
-# This keeps the deploy step focused on rollout health instead of image transfer.
-prepull-model:
-  stage: deploy
-  image: bitnami/kubectl:latest
-  tags:
-    - a40gpu
-  needs: [build-app, build-model]
-  script:
-    # Ensure namespace exists before creating the pre-pull job
-    - kubectl create namespace ${APP_NAME} --dry-run=client -o yaml | kubectl apply -f -
-
-    # Remove any stale pre-pull job from a previous failed run
-    - kubectl delete job ${APP_NAME}-model-prepull -n ${APP_NAME} --ignore-not-found=true
-
-    # Apply a short-lived pre-pull Job pinned to the GPU node.
-    - |
-      cat > /tmp/model-prepull-job.yaml <<EOF
-      apiVersion: batch/v1
-      kind: Job
-      metadata:
-        name: ${APP_NAME}-model-prepull
-        namespace: ${APP_NAME}
-      spec:
-        backoffLimit: 0
-        ttlSecondsAfterFinished: 300
-        template:
-          spec:
-            nodeSelector:
-              nvidia.com/gpu.present: "true"
-            tolerations:
-              - key: nvidia.com/gpu
-                operator: Exists
-                effect: NoSchedule
-            restartPolicy: Never
-            containers:
-              - name: prepull
-                image: ${PULL_REGISTRY}/${APP_NAME}-model:${IMAGE_TAG}
-                imagePullPolicy: IfNotPresent
-                command: ["sh", "-c", "echo model image cached on GPU node"]
-      EOF
-    - kubectl apply -f /tmp/model-prepull-job.yaml
-
-    # Wait up to 40 minutes for first cold pull; usually seconds after cache warmup.
-    - |
-      if ! kubectl wait --for=condition=complete --timeout=40m -n ${APP_NAME} job/${APP_NAME}-model-prepull; then
-        echo "prepull-model failed or timed out. Dumping diagnostics..."
-        kubectl get job -n ${APP_NAME} ${APP_NAME}-model-prepull -o wide || true
-        kubectl describe job -n ${APP_NAME} ${APP_NAME}-model-prepull || true
-        kubectl get pods -n ${APP_NAME} -l job-name=${APP_NAME}-model-prepull -o wide || true
-        kubectl describe pod -n ${APP_NAME} -l job-name=${APP_NAME}-model-prepull || true
-        kubectl logs -n ${APP_NAME} -l job-name=${APP_NAME}-model-prepull --tail=200 || true
-        kubectl get events -n ${APP_NAME} --sort-by=.metadata.creationTimestamp | tail -n 100 || true
-        exit 1
-      fi
-    - kubectl logs -n ${APP_NAME} job/${APP_NAME}-model-prepull --tail=100 || true
-
-    # Clean up the temporary job.
-    - kubectl delete job ${APP_NAME}-model-prepull -n ${APP_NAME} --ignore-not-found=true
-  only:
-    - main
-
-# Deploy both containers via Helm (only on main branch)
+# Deploy both containers via Helm (only on main branch).
+# 30 m timeout covers a cold pull of the 6-GB model image on the GPU node.
 deploy:
   stage: deploy
   image: alpine/helm:3.14.0
   tags:
     - a40gpu
-  needs: [prepull-model]
+  needs: [build-app, build-model]
   script:
     - helm upgrade --install ${APP_NAME} ./helm-chart
       --set app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
@@ -155,8 +94,7 @@ deploy:
       --namespace ${APP_NAME}
       --create-namespace
       --wait
-      --wait-for-jobs
-      --timeout 10m0s
+      --timeout 30m0s
   only:
     - main
 

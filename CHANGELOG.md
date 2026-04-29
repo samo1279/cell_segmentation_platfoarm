@@ -4,17 +4,13 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Fix Helm context deadline exceeded on large image deploy (2026-04-29)
+## [Unreleased] — Simplify deploy: remove prepull-model job, increase Helm timeout (2026-04-29)
 
 ### Fixed
-- `.gitlab-ci.yml` — root cause: Helm `--wait` timeout included the 15-25 min cold pull of the 6.8 GB model image; the Kubernetes client rate-limiter context expired mid-poll causing `client rate limiter Wait returned an error: context deadline exceeded`
-- Added `prepull-model` job in the deploy stage that creates a Kubernetes `Job` pinned to the GPU node, waits with `kubectl wait --for=condition=complete --timeout=40m`, then deletes the Job; `deploy` now depends on `prepull-model` so Helm rollout waits only for startup health, not layer download
-- Added `--wait-for-jobs` to Helm deploy for standards-aligned Kubernetes waiting semantics and deterministic hook/Job completion behavior
-- Reduced Helm `--timeout` back to `10m0s` after separating image transfer from rollout health checks
-- `.gitlab-ci.yml` — hardened pre-pull failure path: when `kubectl wait` times out or fails, CI now automatically dumps Job/Pod status, `describe`, logs, and recent namespace events before failing, so the exact root cause (image pull, scheduling, API pressure, auth) is visible in one run
+- `.gitlab-ci.yml` — root cause: Helm `--wait --timeout 10m0s` expired during the 15–25 min cold pull of the 6.8 GB model image, raising `context deadline exceeded`. Fix: removed `prepull-model` stage entirely and increased Helm timeout to `30m0s`, which is enough to cover cold pull + container startup in a single step. This matches the structure of the last known-good commit (`d3ca9e5`).
 
-### Changed
-- `.gitlab-ci.yml` — removed mutable `latest` image tagging from Kaniko build jobs; deployments remain immutable and traceable by commit-SHA tags only (`${IMAGE_TAG}`)
+### Removed
+- `.gitlab-ci.yml` — `prepull-model` job (Kubernetes `batch/v1` Job + `kubectl wait` approach) removed; the YAML heredoc with shell-variable interpolation was fragile and added complexity without value once the Helm timeout is adequate.
 
 ---
 
