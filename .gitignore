@@ -1,2 +1,6 @@
 .DS_Store
 document/Base--File.docx
+
+# Local environment secrets — never commit real credentials
+.env
+

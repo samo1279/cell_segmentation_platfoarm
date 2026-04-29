@@ -1,161 +1,179 @@
 # Cell Segmentation Platform — POC v1
 
-Browser-based cell segmentation tool for on-premise research labs. Upload microscopy images, tune Cellpose parameters, and receive a colored segmentation overlay, cell count, per-cell statistics, and downloadable results — without sending data outside your network.
+Browser-based cell segmentation for on-premise research labs. Upload microscopy images, tune Cellpose parameters, and receive a coloured overlay, cell count, per-cell statistics, and downloadable results — without sending data outside your network.
 
-> **Thesis context**: This POC demonstrates a GDPR-compliant on-premise alternative to cloud-hosted tools (e.g., the HuggingFace Cellpose Space), where image data never leaves the lab infrastructure.
+> **Thesis context**: This POC demonstrates a GDPR-compliant on-premise alternative to cloud-hosted tools such as the HuggingFace Cellpose Space, where image data never leaves the lab infrastructure.
 
 ---
 
 ## Architecture
 
-Two Docker containers, one internal network:
+Three Docker services, one internal network:
 
 ```
 Browser
-  └─► App Container (Gradio, port 8001)
-        └─► Model Container (FastAPI + Cellpose, internal only)
+  └─► App Container  (Gradio + FastAPI, port 8001)
+        ├─► /register  — self-registration page
+        └─► Model Container  (FastAPI + Cellpose, internal only, port 8000)
+                 └─► PostgreSQL 16  (internal only, port 5432)
 ```
 
-- **App Container** (`App_container/`): Single `app.py` — Gradio Blocks UI. Handles file upload, parameter sliders, overlay rendering, statistics, and downloads.
-- **Model Container** (`Model_container/`): FastAPI wrapping Cellpose `cyto3`. Exposes `GET /health`, `GET /parameters`, `POST /segment`. Never port-mapped to the host.
+| Service | Image base | Exposed to host |
+|---|---|---|
+| App | `python:3.11-slim` | Port `8001` |
+| Model | `python:3.11-slim` | Internal only |
+| DB | `postgres:16-alpine` | Internal only |
 
-See [improved_system_design.md](improved_system_design.md) for full architecture diagrams, API contract, and design decisions.
+Full architecture diagrams, API contract, and design decisions → [document/system_design.md](document/system_design.md)
 
 ---
 
-## Quick Start
+## Deployment Paths
 
-**Prerequisites:** Docker Desktop (or Docker Engine + Compose plugin), 4 GB RAM.
+| | Local development | Server / GPU |
+|---|---|---|
+| File | `compose.yaml` | `helm-chart/` |
+| Machine | Any laptop (macOS/Linux) | Kubernetes GPU node |
+| GPU | No — CPU only | Yes — NVIDIA GPU |
+| Command | `docker compose up --build` | `helm upgrade --install …` |
+| URL | `http://localhost:8001` | `https://cellpose-poc.g007.imec.local` |
+
+---
+
+## Quick Start (Local — macOS / Linux, CPU)
+
+**Prerequisites:** Docker Desktop (or Docker Engine + Compose plugin), 4 GB RAM free.
 
 ```bash
 # 1. Clone
 git clone <repo-url>
 cd POC_version1
 
-# 2. Build and start (first build downloads Cellpose weights — ~500 MB, takes a few minutes)
+# 2. Create your local secrets file
+cp .env.example .env
+# Edit .env — set ADMIN_PASSWORD and POSTGRES_PASSWORD
+
+# 3. Build and start
+#    First run downloads Cellpose model weights (~500 MB) — takes a few minutes.
 docker compose up --build
 
-# 3. Open the app
+# 4. Open the app
 open http://localhost:8001
 ```
 
-To stop:
+**Register an account** at `http://localhost:8001/register` or follow the "Register here" link on the login page.
 
+To stop and keep data:
 ```bash
 docker compose down
 ```
 
+To stop and wipe the database volume:
+```bash
+docker compose down -v
+```
+
 ---
 
-## GPU Acceleration
+## Server Deployment (Kubernetes + GPU)
 
-The Model Container runs the **cpsam** model (Cellpose SAM, ViT-H backbone). On CPU, segmentation takes **5–15 minutes per image** depending on resolution. On a CUDA-capable GPU, the same image segments in **10–30 seconds** — a 20–50× speedup. For interactive lab use, GPU is strongly recommended.
+The Helm chart in `helm-chart/` deploys to a Kubernetes cluster with GPU support.
 
-### Host prerequisites (Ubuntu/Debian + NVIDIA GPU)
-
-1. Verify the NVIDIA driver is installed:
-   ```bash
-   nvidia-smi
-   ```
-2. Install nvidia-container-toolkit so Docker can access the GPU:
-   ```bash
-   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-   curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-   sudo apt-get update
-   sudo apt-get install -y nvidia-container-toolkit
-   sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
-   ```
-3. Smoke-test GPU access inside Docker:
-   ```bash
-   docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
-   ```
-
-### Running on GPU (default — Linux + NVIDIA)
-
-After completing the prerequisites above, the default compose file uses GPU:
-
-```bash
-docker compose up --build
+```
+helm-chart/
+├── Chart.yaml          # Chart metadata
+├── values.yaml         # useGpu: true, ingress host, replica counts
+└── templates/
+    ├── deployment.yaml # Deployments for app + model + db
+    ├── services.yaml   # ClusterIP services
+    └── ingress.yaml    # Ingress at cellpose-poc.g007.imec.local
 ```
 
-### Running on CPU (macOS, no NVIDIA GPU)
-
-Override the default with the CPU compose file:
+**Build the GPU-enabled model image before deploying:**
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build
+# Build with CUDA 12.1 PyTorch wheels baked in
+docker build \
+  --build-arg USE_CUDA=true \
+  -t <registry>/cellpose-poc-model:latest \
+  Model_container/
+
+# Push to your cluster registry
+docker push <registry>/cellpose-poc-model:latest
 ```
 
-### Verify GPU is active
+**Deploy with Helm:**
 
 ```bash
-curl http://localhost:8000/health
-# → {"ok": true, "model": "cpsam", "gpu": true}
+helm upgrade --install cellpose-poc ./helm-chart \
+  --set image.model=<registry>/cellpose-poc-model:latest \
+  --namespace cellpose --create-namespace
 ```
 
-`"gpu": false` means the model fell back to CPU (driver missing, toolkit not configured, or CPU override applied).
+---
+
+## Authentication
+
+The platform uses per-user accounts backed by PostgreSQL.
+
+| Action | URL |
+|---|---|
+| Log in | `http://localhost:8001/` |
+| Register | `http://localhost:8001/register` |
+
+- The **admin** account is seeded automatically at first startup using `ADMIN_PASSWORD` from your `.env` file.
+- Admin users see all segmentation history; regular users see only their own records.
+- Passwords are stored as bcrypt hashes — never in plaintext.
 
 ---
 
 ## Usage
 
-1. **Upload image** — drag and drop a PNG, TIFF, or JPEG microscopy image (max 50 MB, max 8192×8192 px)
-2. **Adjust parameters** using the sliders:
+1. **Log in** — use the admin account or register a new one
+2. **Upload image** — drag and drop a PNG, TIFF, or JPEG (max 50 MB)
+3. **Adjust parameters** using the sliders:
    - **Diameter** — expected cell diameter in pixels (0 = auto-detect)
-   - **Flow threshold** — max flow field error; higher = more cells detected (default 0.4)
+   - **Flow threshold** — max flow error; higher = more cells (default 0.4)
    - **Cell probability threshold** — lower = more pixels counted as cells (default 0.0)
-3. **Click Segment** — results appear in 5–60 seconds depending on image size
-4. **View results**:
-   - Colored overlay of detected cells on the original image
+   - **Model** — `cyto3` (fast, U-Net) or `cpsam` (accurate, ViT-H SAM backbone)
+4. **Click Segment** — results appear in seconds on GPU, minutes on CPU
+5. **View results**:
+   - Coloured overlay of detected cells
    - Summary: cell count, mean/median/std area, smallest/largest cell
-   - Per-cell statistics table: Cell ID, area in pixels, area as % of image
-   - Cell size distribution histogram
-5. **Download** — overlay PNG or raw `masks.npy` (NumPy integer array, one label per cell)
+   - Per-cell statistics table and size distribution histogram
+6. **Download** — overlay PNG, `masks.npy` (NumPy int array), or statistics CSV
+7. **Batch** tab — upload multiple images and download a ZIP of all results
+8. **History** tab — view all past segmentation jobs
 
 ---
 
 ## API Reference
 
-The Model Container exposes three endpoints on its internal Docker network (`http://model:8000`):
+The Model Container exposes these endpoints on the internal Docker network (`http://model:8000`):
 
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Returns model name, GPU status, and `ok: true` |
-| `GET` | `/parameters` | Returns JSON schema for all tunable parameters |
-| `POST` | `/segment` | Accepts image + params, returns `masks.npy` binary |
+|---|---|---|
+| `GET` | `/health` | Liveness probe — `{"status":"ok"}` when models are ready |
+| `GET` | `/parameters` | JSON schema of all tunable segmentation parameters |
+| `POST` | `/segment` | Segment an image; returns `masks.npy` binary |
+| `POST` | `/auth/register` | Register a new user |
+| `POST` | `/auth/login` | Validate credentials → `{"valid": true/false}` |
+| `GET` | `/projects` | List segmentation history (filtered by `?user=` unless admin) |
 
-**`POST /segment` request** (multipart/form-data):
+**`POST /segment`** (multipart/form-data):
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `image` | file | required | PNG, TIFF, or JPEG, max 50 MB |
+|---|---|---|---|
+| `image` | file | required | PNG / TIFF / JPEG, max 50 MB |
+| `model_type` | string | `cyto3` | `cyto3` or `cpsam` |
 | `diameter` | float | auto | Expected cell diameter in pixels |
-| `flow_threshold` | float | 0.4 | Flow field error threshold |
-| `cellprob_threshold` | float | 0.0 | Cell probability threshold |
+| `flow_threshold` | float | `0.4` | Flow field error threshold |
+| `cellprob_threshold` | float | `0.0` | Cell probability threshold |
 
 **Responses:**
-- `200` — `application/octet-stream` — NumPy `.npy` mask array (int32, shape: H×W)
-- `422` — `{"detail": "..."}` — validation error (bad format, oversized file)
-- `500` — `{"detail": "..."}` — segmentation error
-
-See [improved_system_design.md](improved_system_design.md) for the full API contract.
-
----
-
-## Configuration
-
-| Variable | Container | Default | Description |
-|----------|-----------|---------|-------------|
-| `USE_GPU` | model | `false` | Set to `true` to use CUDA GPU |
-| `GRADIO_SERVER_NAME` | app | `0.0.0.0` | Gradio bind address |
-
-To enable GPU, edit `docker-compose.yml`:
-
-```yaml
-  model:
-    environment:
-      - USE_GPU=true
-```
+- `200` — `application/octet-stream` — NumPy `.npy` mask array (int32, H×W)
+- `422` — validation error (bad format, oversized file)
+- `500` — segmentation error
 
 ---
 
@@ -164,92 +182,110 @@ To enable GPU, edit `docker-compose.yml`:
 ```
 POC_version1/
 ├── App_container/
-│   ├── app.py              # Gradio UI — upload, sliders, overlay, stats, downloads
-│   ├── requirements.txt    # gradio, httpx, numpy, Pillow, matplotlib
+│   ├── app.py              # Gradio UI + FastAPI host (gr.mount_gradio_app)
+│   ├── requirements.txt    # gradio, fastapi, httpx, numpy, Pillow, matplotlib
 │   └── Dockerfile          # python:3.11-slim, port 8001
+│
 ├── Model_container/
 │   ├── cellpose_api/
-│   │   └── app.py          # FastAPI — /health, /parameters, /segment
-│   ├── requirements.txt    # fastapi, uvicorn, cellpose, numpy, imageio, tifffile
-│   └── Dockerfile          # python:3.11-slim, port 8000 (internal only)
-├── media/
-│   └── test/               # 68 microscopy image/mask pairs for validation
+│   │   └── app.py          # FastAPI — /health /parameters /segment /auth/* /projects
+│   ├── requirements.txt    # fastapi, uvicorn, cellpose, psycopg2-binary, bcrypt
+│   └── Dockerfile          # python:3.11-slim, ARG USE_CUDA=false, port 8000 (internal)
+│
+├── helm-chart/             # Kubernetes deployment with GPU support
+│   ├── Chart.yaml
+│   ├── values.yaml         # useGpu: true, ingress host
+│   └── templates/
+│
+├── document/
+│   ├── system_design.md    # Full architecture spec — 3-service stack, API contract
+│   └── chapter3*.md        # Thesis chapter drafts
+│
+├── tests/
+│   └── integration_test.py # End-to-end test against a running stack
+│
 ├── .github/
-│   ├── agents/             # Custom AI agents: gradio-dev, model-dev, devops, docs
-│   ├── instructions/       # system-design.instructions.md — enforces architecture compliance
-│   └── plan.md             # Phased implementation plan (4 phases)
-├── docker-compose.yml      # Two-service stack: app (port 8001) + model (internal)
-├── improved_system_design.md  # Full architecture spec with Mermaid diagrams
-└── CHANGELOG.md            # All changes, Keep a Changelog format
+│   ├── agents/             # Copilot agents: gradio-dev, model-dev, devops, docs
+│   ├── instructions/       # system-design.instructions.md — enforces architecture rules
+│   ├── plan.md             # Original phased plan
+│   └── plan2.md            # Cleanup plan (implemented 2026-05-01)
+│
+├── compose.yaml            # Local CPU dev stack (3 services: app + model + db)
+├── .env.example            # Template — copy to .env and fill in secrets
+├── .gitignore
+├── CHANGELOG.md            # All notable changes, Keep a Changelog format
+└── README.md               # This file
 ```
+
+---
+
+## Configuration
+
+| Variable | Service | Default | Description |
+|---|---|---|---|
+| `ADMIN_PASSWORD` | model | — | Admin account password (from `.env`) |
+| `POSTGRES_PASSWORD` | model + db | — | Database password (from `.env`) |
+| `MODEL_URL` | app | `http://model:8000/segment` | Segmentation endpoint |
+| `MODEL_API_KEY` | app + model | `` (empty) | Optional API key for `/segment` |
+| `ADMIN_USER` | app + model | `admin` | Username with full history access |
+| `USE_GPU` | model | `false` | Set by Helm chart for server builds |
+| `DATABASE_URL` | model | set in compose.yaml | PostgreSQL connection string |
+| `GRADIO_SERVER_NAME` | app | `0.0.0.0` | Gradio bind address |
 
 ---
 
 ## Development
 
-### Modify the Gradio UI
-Edit `App_container/app.py`. Rebuild only the app container:
+### Rebuild a single service
 
 ```bash
-docker compose up --build app
+docker compose up --build app      # Gradio UI changes
+docker compose up --build model    # FastAPI / Cellpose changes
 ```
-
-### Modify the Model Container
-Edit `Model_container/cellpose_api/app.py`. Rebuild the model container:
-
-```bash
-docker compose up --build model
-```
-
-**Do not change the API contract** (`/health`, `/parameters`, `/segment`) without updating `improved_system_design.md` first — see `.github/instructions/system-design.instructions.md`.
 
 ### Run integration tests
 
 ```bash
-# Health check from inside the Docker network
-docker compose exec app curl -s http://model:8000/health
-
-# End-to-end segmentation test (synthetic image)
-docker compose exec app python -c "
-import httpx, io, numpy as np
-from PIL import Image
-img = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
-buf = io.BytesIO()
-Image.fromarray(img).save(buf, format='PNG')
-resp = httpx.post('http://model:8000/segment',
-    files={'image': ('test.png', buf.getvalue(), 'image/png')},
-    data={'diameter': '30', 'flow_threshold': '0.4', 'cellprob_threshold': '0.0'},
-    timeout=120)
-masks = np.load(io.BytesIO(resp.content))
-print(f'Status: {resp.status_code} | Masks: {masks.shape} | Cells: {len(np.unique(masks)) - 1}')
-"
+# Requires the stack to be running
+cd tests/
+pip install -r requirements-integration.txt
+pytest integration_test.py -v
 ```
 
-### AI Agents
-Four specialized agents are available in `.github/agents/` for use with GitHub Copilot:
+### AI Agents (GitHub Copilot)
 
-| Agent | Trigger | Scope |
-|-------|---------|-------|
-| `@gradio-dev` | Gradio UI changes | `App_container/app.py` |
-| `@model-dev` | API / Cellpose changes | `Model_container/` |
-| `@devops` | Docker, networking, testing | `docker-compose.yml`, Dockerfiles |
-| `@docs` | Documentation updates | `README.md`, `CHANGELOG.md`, `improved_system_design.md` |
+Specialized agents are in `.github/agents/`:
+
+| Agent | Use for |
+|---|---|
+| `gradio-dev` | Gradio UI, callbacks, layout (`App_container/app.py`) |
+| `model-dev` | FastAPI endpoints, Cellpose, Dockerfile (`Model_container/`) |
+| `devops` | Docker Compose, networking, health checks, container logs |
+| `docs` | README, CHANGELOG, `document/system_design.md` |
+
+**Architecture rule:** All changes must conform to [document/system_design.md](document/system_design.md). See `.github/instructions/system-design.instructions.md` for enforcement rules.
 
 ---
 
-## Roadmap
+## Status
 
-| Phase | Goal | Status |
-|-------|------|--------|
-| **Phase 1 — Foundation** | Working 2-container MVP: single image upload, segment, overlay, stats, download | ✅ Complete |
-| **Phase 2 — Enhanced Analysis** | Batch upload, model selection dropdown, CSV export, opacity slider | Planned |
-| **Phase 3 — Annotation** | CVAT integration, PostgreSQL persistence, project management | Planned |
-| **Phase 4 — Production** | Auth, TLS, multi-user, scaling, 3D segmentation | Planned |
-
-See [.github/plan.md](.github/plan.md) for step-by-step task breakdown.
+| Feature | Status |
+|---|---|
+| Single-image segmentation (cyto3 + cpsam) | ✅ Done |
+| Coloured overlay, cell count, area stats | ✅ Done |
+| Downloadable overlay PNG, masks.npy, CSV | ✅ Done |
+| Batch segmentation + ZIP download | ✅ Done |
+| 3D z-stack (multi-frame TIFF) | ✅ Done |
+| Per-user accounts + bcrypt auth | ✅ Done |
+| Self-registration page (`/register`) | ✅ Done |
+| Segmentation history (PostgreSQL) | ✅ Done |
+| Local dev via `docker compose up --build` | ✅ Done |
+| Server/GPU deploy via Helm chart | ✅ Done |
 
 ---
 
 ## License
 
 To be determined.
+
+

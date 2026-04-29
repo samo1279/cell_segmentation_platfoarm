@@ -4,6 +4,30 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Codebase cleanup & deployment consolidation (2026-05-01)
+
+### Added
+- `compose.yaml` — single Compose file for local CPU development (replaces three old files); reads secrets from `.env`
+- `.env.example` — template for `ADMIN_PASSWORD` and `POSTGRES_PASSWORD`; instructs developers to `cp .env.example .env`
+- `system_design.md` → moved to `document/system_design.md`; all references updated
+
+### Changed
+- `Model_container/Dockerfile` — self-contained build; merges all logic from deleted `Dockerfile.base`; `ARG USE_CUDA=false` makes CPU the safe default for local builds; CUDA 12.1 wheels installed only when `USE_CUDA=true`
+- `App_container/app.py` — replaced internal `_gr_routes.App.create_app` + `BaseHTTPMiddleware` with official `gr.mount_gradio_app` API; `/register` and `/auth/register` are now plain FastAPI route handlers; login page `auth_message` now contains a clickable HTML link to `/register`
+- `.gitignore` — added `.env` entry to prevent accidental credential commit
+- `.github/instructions/system-design.instructions.md` — updated doc reference from `improved_system_design.md` to `system_design.md`; corrected architecture constraints to reflect 3-service stack and two deployment paths
+
+### Removed
+- `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml` — replaced by `compose.yaml`; GPU deployment moved exclusively to Helm chart
+- `Model_container/Dockerfile.base` — merged into `Model_container/Dockerfile`
+- `Model_container/cellpose_api/tasks.py` — dead Celery code; Celery and Redis are not part of this architecture
+- `Model_container/cvat_serverless/` — dead nuclio serverless code; no nuclio runtime exists in any service
+- `results_masking/` — binary `.npy` artifacts committed to git by mistake
+- `improved_system_design.md`, `improved_system_design_v2.md` — replaced by `system_design.md`
+- `class_diagram.md` — stale diagram; accurate architecture is in `system_design.md`
+
+---
+
 ## [Unreleased] — Fix HTTP 413 on large image uploads (2026-04-26)
 
 ### Fixed
@@ -12,6 +36,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ---
 
 ## [Unreleased] — DB-backed user authentication & self-registration (2026-04-23)
+
 
 ### Added
 - `Model_container/requirements.txt` — `bcrypt` package for secure password hashing.

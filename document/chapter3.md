@@ -1,14 +1,4 @@
-# Chapter 3 — System Design and Implementation
-
-## 3.1 Overview
-
-This chapter describes the architecture, design decisions, and implementation of the Cell Segmentation Platform Proof of Concept (POC v1). The system enables on-premise, browser-based cell segmentation by combining two dedicated Docker containers: a user-facing web application and a machine learning inference service. All processing runs inside a Kubernetes cluster on a local university server, ensuring that no patient or experimental data leaves the institution's network.
-
-The platform was designed around three core constraints derived from the research context:
-
-1. **On-premise requirement** — microscopy images from biological experiments must never be transmitted to an external cloud service.
-2. **GPU availability** — the university server is equipped with an NVIDIA A40 GPU, which must be exploitable for Cellpose inference without requiring any client-side hardware.
-3. **Operator simplicity** — biologists who are not software engineers must be able to upload an image, adjust parameters, and retrieve results through a standard web browser without any local installation.
+# Chapter 3 — Methodology
 
 ---
 

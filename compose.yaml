@@ -1,0 +1,95 @@
+# Local development — runs on any machine including macOS (CPU, no GPU required).
+# GPU inference for the server is handled by the Helm chart (helm-chart/).
+#
+# Prerequisites:
+#   1. Copy the example env file and fill in your passwords:
+#        cp .env.example .env
+#   2. Build and start all services:
+#        docker compose up --build
+#
+# Access:
+#   App UI:         http://localhost:8001
+#   Register page:  http://localhost:8001/register
+#
+# Ref: https://docs.docker.com/compose/compose-application-model/
+
+services:
+
+  app:
+    build: ./App_container
+    ports:
+      - "8001:8001"
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
+      # Internal Docker network hostname of the model service.
+      - MODEL_URL=http://model:8000/segment
+      # Leave blank to disable API key auth in local dev.
+      # Set to a secret value to require X-API-Key on every /segment call.
+      - MODEL_API_KEY=
+      # Username that bypasses per-user history filter and sees all records.
+      # Must match ADMIN_USER set in the model service below.
+      - ADMIN_USER=admin
+    depends_on:
+      model:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  model:
+    build:
+      context: ./Model_container
+      args:
+        # CPU-only PyTorch — works on macOS and any Linux machine without an NVIDIA GPU.
+        # Inference will be slower (~2-10 min per image) but fully functional.
+        USE_CUDA: "false"
+    expose:
+      - "8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - USE_GPU=false
+      # Reads POSTGRES_PASSWORD from the .env file via variable interpolation.
+      # Ref: https://docs.docker.com/compose/how-tos/environment-variables/envvars-precedence/
+      - DATABASE_URL=postgresql://cellseg:${POSTGRES_PASSWORD:-cellseg}@db:5432/cellseg
+      # Leave blank to disable API key auth.
+      - API_KEY=
+      - ADMIN_USER=admin
+      # Reads ADMIN_PASSWORD from the .env file. Set a strong password before first run.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "--max-time", "5", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      # Cellpose loads two models at startup (cyto3 + cpsam). On CPU this takes
+      # up to 2 minutes — start_period prevents the health probe from firing early.
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  db:
+    image: postgres:16-alpine
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_DB=cellseg
+      - POSTGRES_USER=cellseg
+      # Reads POSTGRES_PASSWORD from the .env file.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cellseg}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "cellseg"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:

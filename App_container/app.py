@@ -12,9 +12,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from PIL import Image
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-import gradio.routes as _gr_routes
-from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 # ---------------------------------------------------------------------------
@@ -672,9 +671,10 @@ with gr.Blocks(title="Cell Segmentation - Cellpose", max_file_size="50mb") as de
 demo.queue()
 
 # ---------------------------------------------------------------------------
-# Registration page — plain HTML served by FastAPI (no Gradio subpath needed)
-# FastAPI routes are checked BEFORE the Gradio mount, so /register and
-# /auth/register are never intercepted by the Gradio app at /.
+# Registration page — plain HTML served as a standard FastAPI GET route.
+# Defined on the FastAPI host app BEFORE gr.mount_gradio_app so it takes
+# priority over the Gradio mount at "/".
+# Ref: https://www.gradio.app/docs/gradio/mount_gradio_app
 # ---------------------------------------------------------------------------
 
 _REGISTER_HTML = """\
@@ -740,45 +740,52 @@ _REGISTER_HTML = """\
 """
 
 # ---------------------------------------------------------------------------
-# Registration middleware — runs BEFORE Gradio's router.
-# BaseHTTPMiddleware only handles HTTP; WebSocket/lifespan scopes are passed
-# through automatically, so Gradio's queue and file-serving are unaffected.
+# FastAPI host application.
+# /register and /auth/register are standard FastAPI route handlers defined
+# BEFORE gr.mount_gradio_app so they are checked first by Starlette's router.
+# Official mounting API: https://www.gradio.app/docs/gradio/mount_gradio_app
 # ---------------------------------------------------------------------------
 
-class _RegistrationMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        if request.url.path == "/register" and request.method == "GET":
-            return HTMLResponse(_REGISTER_HTML)
-        if request.url.path == "/auth/register" and request.method == "POST":
-            try:
-                body = await request.body()
-                resp = httpx.post(
-                    MODEL_REGISTER_URL,
-                    content=body,
-                    headers={"Content-Type": "application/json"},
-                    timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
-                )
-                return JSONResponse(resp.json(), status_code=resp.status_code)
-            except Exception:
-                return JSONResponse(
-                    {"detail": "Could not reach the authentication server. Please try again later."},
-                    status_code=503,
-                )
-        return await call_next(request)
+_fastapi_app = FastAPI()
 
 
-# Build Gradio's internal FastAPI app (identical behaviour to demo.launch() —
-# file serving, WebSockets, and the queue all work correctly at /).
-# Add the registration middleware so /register is reachable without any auth.
-_app = _gr_routes.App.create_app(
+@_fastapi_app.get("/register")
+async def _register_page():
+    return HTMLResponse(_REGISTER_HTML)
+
+
+@_fastapi_app.post("/auth/register")
+async def _register_proxy(request: Request):
+    try:
+        body = await request.body()
+        resp = httpx.post(
+            MODEL_REGISTER_URL,
+            content=body,
+            headers={"Content-Type": "application/json"},
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+        )
+        return JSONResponse(resp.json(), status_code=resp.status_code)
+    except Exception:
+        return JSONResponse(
+            {"detail": "Could not reach the authentication server. Please try again later."},
+            status_code=503,
+        )
+
+
+# Mount Gradio at "/" using the official API.
+# auth= accepts any callable (username, password) -> bool per Gradio docs.
+# auth_message= is rendered as HTML inside the Gradio login page — the <a> tag
+# creates a clickable "Register here" link visible before login.
+app = gr.mount_gradio_app(
+    _fastapi_app,
     demo,
+    path="/",
     auth=_auth_fn,
     auth_message=(
-        "Cell Segmentation Platform — please log in.\n"
-        "New user? Visit /register to create an account."
+        "Cell Segmentation Platform — please log in.<br>"
+        "No account yet? <a href='/register'>Register here</a>"
     ),
 )
-_app.add_middleware(_RegistrationMiddleware)
 
 if __name__ == "__main__":
-    uvicorn.run(_app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
