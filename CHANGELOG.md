@@ -4,6 +4,14 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Kaniko layer caching — standard fix for slow CI builds (2026-04-29)
+
+### Changed
+- `.gitlab-ci.yml` — added `--cache=true`, `--cache-repo`, and `--insecure-pull` to both `build-model` and `build-app` Kaniko jobs; cached layers (apt deps, pip packages, CUDA torch wheels, model weights) are stored in the MicroK8s registry and reused on every subsequent build; only the thin `COPY app.py` layer (layer 7) rebuilds on normal commits — drops build time from ~12 min to ~30-60 sec per commit after the first cold-cache run
+- `.gitlab-ci.yml` — increased `helm upgrade --timeout` from `10m0s` to `20m0s` to cover the first cold-cache build plus Cellpose model loading time during pod startup
+
+---
+
 ## [Unreleased] — Fix all build failures and align with official standards (2026-04-29)
 
 ### Fixed

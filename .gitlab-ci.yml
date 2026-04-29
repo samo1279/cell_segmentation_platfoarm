@@ -51,7 +51,10 @@ build-app:
       --context "${CI_PROJECT_DIR}/App_container"
       --dockerfile "${CI_PROJECT_DIR}/App_container/Dockerfile"
       --destination "${PUSH_REGISTRY}/${APP_NAME}-app:${IMAGE_TAG}"
+      --cache=true
+      --cache-repo "${PUSH_REGISTRY}/${APP_NAME}-app-cache"
       --insecure
+      --insecure-pull
 
 # Build the FastAPI / Cellpose Model Container image
 build-model:
@@ -68,7 +71,10 @@ build-model:
       --dockerfile "${CI_PROJECT_DIR}/Model_container/Dockerfile"
       --build-arg USE_CUDA=true
       --destination "${PUSH_REGISTRY}/${APP_NAME}-model:${IMAGE_TAG}"
+      --cache=true
+      --cache-repo "${PUSH_REGISTRY}/${APP_NAME}-model-cache"
       --insecure
+      --insecure-pull
 
 # Deploy both containers via Helm (only on main branch)
 deploy:
@@ -87,7 +93,7 @@ deploy:
       --namespace ${APP_NAME}
       --create-namespace
       --wait
-      --timeout 10m0s
+      --timeout 20m0s
   only:
     - main
 
