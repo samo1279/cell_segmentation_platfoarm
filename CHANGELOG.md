@@ -8,11 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 - `.gitlab-ci.yml` — root cause: Helm `--wait` timeout included the 15-25 min cold pull of the 6.8 GB model image; the Kubernetes client rate-limiter context expired mid-poll causing `client rate limiter Wait returned an error: context deadline exceeded`
-- Added `pre-pull-model` job in the deploy stage that creates a temporary pod on the GPU node, waits up to 40 min for the image to be fully cached in containerd, then deletes the pod; `deploy` job (`needs: [pre-pull-model]`) now runs after image is on disk — Helm `--wait` only covers actual pod startup (~90 s), not image transfer
-- Reduced Helm `--timeout` back to `10m0s` (sufficient now that image pull is separated)
+- Added `prepull-model` job in the deploy stage that creates a Kubernetes `Job` pinned to the GPU node, waits with `kubectl wait --for=condition=complete --timeout=40m`, then deletes the Job; `deploy` now depends on `prepull-model` so Helm rollout waits only for startup health, not layer download
+- Added `--wait-for-jobs` to Helm deploy for standards-aligned Kubernetes waiting semantics and deterministic hook/Job completion behavior
+- Reduced Helm `--timeout` back to `10m0s` after separating image transfer from rollout health checks
+- `.gitlab-ci.yml` — hardened pre-pull failure path: when `kubectl wait` times out or fails, CI now automatically dumps Job/Pod status, `describe`, logs, and recent namespace events before failing, so the exact root cause (image pull, scheduling, API pressure, auth) is visible in one run
 
-### Added
-- `build-model` and `build-app` Kaniko jobs now push a second `--destination ...model:latest` tag alongside the SHA tag; on subsequent deploys the GPU node reuses all heavy layers (apt, pip, CUDA torch, 2.6 GB weights) from the previous `latest` pull — only the thin `COPY app.py` layer (~30 KB) is transferred; pull time drops from 15-25 min → under 5 seconds after the first cold deploy
+### Changed
+- `.gitlab-ci.yml` — removed mutable `latest` image tagging from Kaniko build jobs; deployments remain immutable and traceable by commit-SHA tags only (`${IMAGE_TAG}`)
 
 ---
 
