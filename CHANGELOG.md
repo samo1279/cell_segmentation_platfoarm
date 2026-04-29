@@ -4,6 +4,13 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Fix fastremap import error (2026-04-29)
+
+### Fixed
+- `Model_container/requirements.txt` — added `packaging` as explicit dependency; `fastremap` (Cellpose sub-dependency) imports it at C-extension init time, but `torch 2.11.0` no longer provides it transitively, causing `ModuleNotFoundError: No module named 'packaging'` during Docker image build
+
+---
+
 ## [Unreleased] — Codebase cleanup & deployment consolidation (2026-05-01)
 
 ### Added
