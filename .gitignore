@@ -1,17 +1,15 @@
 .DS_Store
-document/Base--File.docx
+# Word/Excel temp lock files
+~$*
 
 # Local environment secrets — never commit real credentials
 .env
 
-FINAL_VERIFICATION.md
-.gitignore
-document/HELM_CHART_FIXES_APPLIED.md
-document/DEPLOYMENT_TESTING_GUIDE.md
-document/HELM_CHART_ISSUES.md
-document/HELM_FIX_COMPLETE.md
-document/MEMORY_LIMIT_CRITICAL.md
-document/PROOF_OF_FIX.md
-document/QUICK_REFERENCE.md
-document/ROOT_CAUSE_ANALYSIS.md
-document/TECHNICAL_EVIDENCE.md
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Media and binary test data — store externally, not in git
+media/
+results_masking/

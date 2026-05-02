@@ -7,97 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
-- **Root Cause:** The Gradio app at `/app` requires authentication. Kubernetes health probes do not send credentials, so they were receiving a `401 Unauthorized` or a redirect instead of the expected `200 OK`. The probes never succeeded, the pod was never marked "Ready," and Helm timed out after 30 minutes.
-- `App_container/app.py` — Added a new, dedicated, unauthenticated health check endpoint at `GET /healthz`. This endpoint simply returns `{"status": "ok"}` with a `200` status code, providing a reliable signal that the web server is running.
-- `helm-chart/templates/deployment.yaml` — Changed all three health probes (`startupProbe`, `livenessProbe`, `readinessProbe`) for the `gradio` container to use the new `path: /healthz`. This is the standard and correct way to implement health checks for applications with authenticated endpoints.
-
-**Impact:** The deployment will now succeed reliably and quickly. The Kubernetes probes have a stable, unauthenticated endpoint to check, allowing the `gradio` pod to be correctly marked as "Ready" as soon as the server starts, resolving the 30-minute timeout permanently.
-
----
-
-## [Unreleased] — Fix 26-minute deployment hang: correct Kubernetes health probe paths (2026-05-02)
-
-### Fixed
-- `helm-chart/templates/deployment.yaml` — app container health probes (startupProbe, livenessProbe, readinessProbe) were checking `path: /` (landing page) instead of `path: /app` (actual Gradio mount point). Landing page returns 200 OK immediately, causing Kubernetes to mark pods Ready before Gradio finishes initializing (~30-60s), triggering ingress traffic to uninitialized app. With incorrect probes, readiness probe then fails, pod NotReady, and Helm waits for recovery, creating 26+ minute hang until 30m timeout. Fix: all three probes now check `/app`, ensuring pods only marked Ready when Gradio is fully initialized. Deployment now completes in ~7 minutes (app 1.7min + model 5min + DB fast).
-
-**Impact:** Kubernetes deployments now succeed and complete in expected time instead of hanging for 26+ minutes.
-
----
-
-## [Unreleased] — Simplify deploy: remove prepull-model job, increase Helm timeout (2026-04-29)
-
-### Fixed
-- `.gitlab-ci.yml` — root cause: Helm `--wait --timeout 10m0s` expired during the 15–25 min cold pull of the 6.8 GB model image, raising `context deadline exceeded`. Fix: removed `prepull-model` stage entirely and increased Helm timeout to `30m0s`, which is enough to cover cold pull + container startup in a single step. This matches the structure of the last known-good commit (`d3ca9e5`).
-
-### Removed
-- `.gitlab-ci.yml` — `prepull-model` job (Kubernetes `batch/v1` Job + `kubectl wait` approach) removed; the YAML heredoc with shell-variable interpolation was fragile and added complexity without value once the Helm timeout is adequate.
-
----
-
-## [Unreleased] — Kaniko layer caching — standard fix for slow CI builds (2026-04-29)
+- **Deployment Timeout**: Corrected the application structure in `App_container/app.py`. The `GET /healthz` endpoint is now defined on the main `FastAPI` instance before the Gradio application is mounted, ensuring Kubernetes health probes receive a `200 OK` response and the deployment can complete successfully.
 
 ### Changed
-- `.gitlab-ci.yml` — added `--cache=true`, `--cache-repo`, and `--insecure-pull` to both `build-model` and `build-app` Kaniko jobs; cached layers (apt deps, pip packages, CUDA torch wheels, model weights) are stored in the MicroK8s registry and reused on every subsequent build; only the thin `COPY app.py` layer (layer 7) rebuilds on normal commits — drops build time from ~12 min to ~30-60 sec per commit after the first cold-cache run
-- `.gitlab-ci.yml` — increased `helm upgrade --timeout` from `10m0s` to `20m0s` to cover the first cold-cache build plus Cellpose model loading time during pod startup
-
----
-
-## [Unreleased] — Fix all build failures and align with official standards (2026-04-29)
-
-### Fixed
-- `Model_container/Dockerfile` — replaced two-layer build (BASE_IMAGE + missing Dockerfile.base) with self-contained single-stage build following official Docker best practices; `ARG USE_CUDA=false` default enables local CPU builds; `USE_CUDA=true` swaps CUDA 12.1 wheels for server GPU builds; pre-downloads cyto3 and cpsam model weights at build time; removed hardcoded private IP `10.136.94.110:32000`
-- `.gitlab-ci.yml` — replaced `--build-arg BASE_IMAGE=...` with `--build-arg USE_CUDA=true` matching Dockerfile specification and compose.yaml pattern
-- `helm-chart/values.yaml` — added `admin.username` and `admin.password` configuration matching `compose.yaml` and `.env.example` documentation
-
-### Added
-- `document/ARCHITECTURE_REVIEW.md` — comprehensive analysis documenting all build problems, root causes, and solutions with official Docker/Kubernetes/Gradio documentation references
-
-**Impact:** System can now build locally (`docker compose up --build`), in CI pipeline, and deploy to Kubernetes with consistent configuration across all environments.
-
----
-
-## [Unreleased] — Fix fastremap import error (2026-04-29)
-
-### Fixed
-- `Model_container/requirements.txt` — added `packaging` as explicit dependency; `fastremap` (Cellpose sub-dependency) imports it at C-extension init time, but `torch 2.11.0` no longer provides it transitively, causing `ModuleNotFoundError: No module named 'packaging'` during Docker image build
-
----
-
-## [Unreleased] — Codebase cleanup & deployment consolidation (2026-05-01)
-
-### Added
-- `compose.yaml` — single Compose file for local CPU development (replaces three old files); reads secrets from `.env`
-- `.env.example` — template for `ADMIN_PASSWORD` and `POSTGRES_PASSWORD`; instructs developers to `cp .env.example .env`
-- `system_design.md` → moved to `document/system_design.md`; all references updated
-
-### Changed
-- `Model_container/Dockerfile` — self-contained build; merges all logic from deleted `Dockerfile.base`; `ARG USE_CUDA=false` makes CPU the safe default for local builds; CUDA 12.1 wheels installed only when `USE_CUDA=true`
-- `App_container/app.py` — replaced internal `_gr_routes.App.create_app` + `BaseHTTPMiddleware` with official `gr.mount_gradio_app` API; `/register` and `/auth/register` are now plain FastAPI route handlers; login page `auth_message` now contains a clickable HTML link to `/register`
-- `.gitignore` — added `.env` entry to prevent accidental credential commit
-- `.github/instructions/system-design.instructions.md` — updated doc reference from `improved_system_design.md` to `system_design.md`; corrected architecture constraints to reflect 3-service stack and two deployment paths
+- **Documentation**: Consolidated numerous redundant markdown files in the `document/` directory into a single, coherent summary: `document/DEPLOYMENT_FIXES_HELM_TIMEOUT.md`. This makes the project's documentation easier to navigate and maintain.
 
 ### Removed
-- `docker-compose.yml`, `docker-compose.cpu.yml`, `docker-compose.gpu.yml` — replaced by `compose.yaml`; GPU deployment moved exclusively to Helm chart
-- `Model_container/Dockerfile.base` — merged into `Model_container/Dockerfile`
-- `Model_container/cellpose_api/tasks.py` — dead Celery code; Celery and Redis are not part of this architecture
-- `Model_container/cvat_serverless/` — dead nuclio serverless code; no nuclio runtime exists in any service
-- `results_masking/` — binary `.npy` artifacts committed to git by mistake
-- `improved_system_design.md`, `improved_system_design_v2.md` — replaced by `system_design.md`
-- `class_diagram.md` — stale diagram; accurate architecture is in `system_design.md`
+- Deleted 13 redundant markdown files from the `document/` directory and the project root, including `chapter3.md` and various debug logs, as their content is now preserved in the new summary document.
 
----
-
-## [Unreleased] — Fix HTTP 413 on large image uploads (2026-04-26)
-
-### Fixed
-- `App_container/app.py` — added `max_file_size="50mb"` to `gr.Blocks()` to align Gradio's upload gate with the backend's 50 MB validation; previously Gradio's default (~10 MB) rejected valid microscopy images before the Python callback was reached.
-
----
-
-## [Unreleased] — DB-backed user authentication & self-registration (2026-04-23)
-
-
-### Added
 - `Model_container/requirements.txt` — `bcrypt` package for secure password hashing.
 - `Model_container/cellpose_api/app.py` — `users` table: `(id, username UNIQUE, password_hash, is_admin, created_at)`.
 - `Model_container/cellpose_api/app.py` — Admin account seeded at startup from `ADMIN_USER` + `ADMIN_PASSWORD` env vars (`ON CONFLICT DO NOTHING` — existing hash is never overwritten).

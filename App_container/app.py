@@ -930,28 +930,34 @@ document.getElementById('frm').addEventListener('submit', async function(e) {
 # FastAPI host application — define auth routes BEFORE Gradio mount.
 # ---------------------------------------------------------------------------
 
-_fastapi_app = FastAPI()
+app = FastAPI()
 
 
-@_fastapi_app.get("/")
+@app.get("/healthz", status_code=200)
+async def healthz():
+    """Simple, unauthenticated health check endpoint for Kubernetes probes."""
+    return {"status": "ok"}
+
+
+@app.get("/")
 async def _landing_page():
     """Public landing page with Sign In / Register CTA buttons."""
     return HTMLResponse(_LANDING_HTML)
 
 
-@_fastapi_app.get("/sign-in")
+@app.get("/sign-in")
 async def _signin_page():
     """Sign In form page."""
     return HTMLResponse(_SIGNIN_HTML)
 
 
-@_fastapi_app.get("/register")
+@app.get("/register")
 async def _register_page():
     """Registration form page."""
     return HTMLResponse(_REGISTER_HTML)
 
 
-@_fastapi_app.post("/auth/register")
+@app.post("/auth/register")
 async def _register_proxy(request: Request):
     """Forward registration to Model Container's /auth/register."""
     try:
@@ -970,17 +976,11 @@ async def _register_proxy(request: Request):
         )
 
 
-@_fastapi_app.get("/healthz", status_code=200)
-async def healthz():
-    """Simple, unauthenticated health check endpoint for Kubernetes probes."""
-    return {"status": "ok"}
-
-
 # Mount Gradio at "/app" — protected by Gradio's built-in auth.
 # After Gradio login succeeds, user is redirected to /app.
 # Landing page at "/" is public (no auth required).
 app = gr.mount_gradio_app(
-    _fastapi_app,
+    app,
     demo,
     path="/app",
     auth=_auth_fn,

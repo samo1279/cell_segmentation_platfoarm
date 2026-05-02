@@ -109,7 +109,7 @@ deploy:
       --namespace ${APP_NAME}
       --create-namespace
       --wait
-      --timeout 6m0s
+      --timeout 15m0s
   only:
     - main
 
