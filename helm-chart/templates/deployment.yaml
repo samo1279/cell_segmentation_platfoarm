@@ -82,6 +82,12 @@ spec:
       nodeSelector:
         role: management
       {{- end }}
+      # Wait for database to be ready before starting model container.
+      # This prevents connection failures during model initialization.
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.28
+          command: ['sh', '-c', 'until nc -z {{ .Release.Name }}-db {{ .Values.db.port }}; do echo waiting for db; sleep 2; done']
       containers:
         - name: cellpose
           image: "{{ .Values.model.image.repository }}:{{ .Values.model.image.tag }}"
@@ -133,6 +139,7 @@ spec:
             httpGet:
               path: /health
               port: {{ .Values.model.port }}
+            initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 3
             timeoutSeconds: 5
@@ -141,6 +148,7 @@ spec:
             httpGet:
               path: /health
               port: {{ .Values.model.port }}
+            initialDelaySeconds: 30
             periodSeconds: 30
             failureThreshold: 5
             timeoutSeconds: 5
@@ -185,6 +193,14 @@ spec:
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", {{ .Values.db.user | quote }}]
-            initialDelaySeconds: 5
+            initialDelaySeconds: 20
             periodSeconds: 10
             failureThreshold: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.db.user | quote }}]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 5
