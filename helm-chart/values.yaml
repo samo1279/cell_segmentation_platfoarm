@@ -30,10 +30,14 @@ model:
       cpu: 500m
       memory: 4Gi
     limits:
-      # No memory limit — server has 1000 GB RAM; let the OS manage it.
-      # A hard limit causes OOMKill even when the node has free RAM.
+      # Realistic memory limit for Cellpose + PyTorch inference.
+      # 16Gi allows: 8GB Cellpose peak + 4GB PyTorch/CUDA + 4GB overhead/buffer
+      # Does NOT need 64Gi; that exceeds typical cluster node memory (60-128Gi).
+      # 64Gi blocks pod scheduling if cluster is moderately loaded (~30-40GB available).
+      # This causes Kubernetes to keep pod in Pending state indefinitely.
+      # Which then causes Helm timeout: "client rate limiter Wait returned context deadline exceeded"
       cpu: 8000m
-      memory: 64Gi
+      memory: 16Gi
 
 # --- Ingress ---
 ingress:
