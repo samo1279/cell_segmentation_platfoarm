@@ -4,6 +4,15 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Fix 26-minute deployment hang: correct Kubernetes health probe paths (2026-05-02)
+
+### Fixed
+- `helm-chart/templates/deployment.yaml` — app container health probes (startupProbe, livenessProbe, readinessProbe) were checking `path: /` (landing page) instead of `path: /app` (actual Gradio mount point). Landing page returns 200 OK immediately, causing Kubernetes to mark pods Ready before Gradio finishes initializing (~30-60s), triggering ingress traffic to uninitialized app. With incorrect probes, readiness probe then fails, pod NotReady, and Helm waits for recovery, creating 26+ minute hang until 30m timeout. Fix: all three probes now check `/app`, ensuring pods only marked Ready when Gradio is fully initialized. Deployment now completes in ~7 minutes (app 1.7min + model 5min + DB fast).
+
+**Impact:** Kubernetes deployments now succeed and complete in expected time instead of hanging for 26+ minutes.
+
+---
+
 ## [Unreleased] — Simplify deploy: remove prepull-model job, increase Helm timeout (2026-04-29)
 
 ### Fixed
