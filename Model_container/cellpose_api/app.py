@@ -23,6 +23,9 @@ load_dotenv()
 USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
 DATABASE_URL = os.environ.get("DATABASE_URL")
 API_KEY: str | None = os.environ.get("API_KEY") or None
+ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+DEFAULT_MODEL_TYPE = os.environ.get("DEFAULT_MODEL_TYPE", "cyto3")
 
 # ---------------------------------------------------------------------------
 # Pydantic request bodies for auth endpoints
@@ -38,6 +41,7 @@ class _AuthLoginRequest(BaseModel):
     password: str
 
 _db_conn = None
+_MODEL_LOAD_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _get_db_conn():
@@ -82,28 +86,51 @@ MODEL = None  # kept for backward compatibility
 MODELS: dict[str, object] = {"cyto3": None, "cpsam": None}
 
 
+def _load_model_sync(name: str):
+    """Load one Cellpose model in a worker thread."""
+    logger.info("Loading Cellpose model '%s' (gpu=%s)...", name, USE_GPU)
+    model = models.CellposeModel(gpu=USE_GPU, pretrained_model=name)
+    logger.info("Model '%s' loaded successfully", name)
+    return model
+
+
+async def _ensure_model_loaded(name: str):
+    """Return a loaded model, loading it lazily on first use."""
+    global MODEL
+    if name not in MODELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid model_type '{name}'. Must be one of: {list(MODELS.keys())}.",
+        )
+    if MODELS[name] is not None:
+        return MODELS[name]
+
+    lock = _MODEL_LOAD_LOCKS.setdefault(name, asyncio.Lock())
+    async with lock:
+        if MODELS[name] is None:
+            loop = asyncio.get_running_loop()
+            MODELS[name] = await loop.run_in_executor(None, lambda: _load_model_sync(name))
+            if name == "cyto3":
+                MODEL = MODELS[name]
+        return MODELS[name]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load both models in parallel using thread-pool executors so the event
-    loop stays unblocked during the 30-90 s load.  /health returns 503 until
-    both are ready, allowing readiness probes to report not-ready without
-    killing the pod."""
+    """Load only the default model at startup; optional models lazy-load on demand.
+
+    Loading every model during startup blocks Uvicorn from accepting health
+    probes. cpsam is therefore loaded lazily when a request selects it.
+    """
     global MODEL, MODELS
-    logger.info(f"Loading Cellpose models (gpu={USE_GPU})...")
-    loop = asyncio.get_event_loop()
+    if DEFAULT_MODEL_TYPE not in MODELS:
+        raise RuntimeError(f"Invalid DEFAULT_MODEL_TYPE={DEFAULT_MODEL_TYPE!r}")
 
-    def _load(name: str):
-        m = models.CellposeModel(gpu=USE_GPU, pretrained_model=name)
-        logger.info(f"Model '{name}' loaded successfully")
-        return m
-
-    cyto3_model, cpsam_model = await asyncio.gather(
-        loop.run_in_executor(None, lambda: _load("cyto3")),
-        loop.run_in_executor(None, lambda: _load("cpsam")),
+    MODELS[DEFAULT_MODEL_TYPE] = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: _load_model_sync(DEFAULT_MODEL_TYPE)
     )
-    MODELS["cyto3"] = cyto3_model
-    MODELS["cpsam"] = cpsam_model
-    MODEL = MODELS["cyto3"]  # backward-compat alias
+    if DEFAULT_MODEL_TYPE == "cyto3":
+        MODEL = MODELS["cyto3"]
 
     # --- DB setup (gracefully skipped when DATABASE_URL is unset) ---
     conn = _get_db_conn()
@@ -117,6 +144,7 @@ async def lifespan(app: FastAPI):
                         id            SERIAL PRIMARY KEY,
                         username      TEXT UNIQUE NOT NULL,
                         password_hash TEXT NOT NULL,
+                        is_admin      BOOLEAN DEFAULT FALSE,
                         created_at    TIMESTAMPTZ DEFAULT NOW()
                     )
                     """
@@ -135,10 +163,25 @@ async def lifespan(app: FastAPI):
                     )
                     """
                 )
-                # Migration: add username column to pre-existing tables
+                # Migrations for pre-existing tables
+                cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE"
+                )
                 cur.execute(
                     "ALTER TABLE projects ADD COLUMN IF NOT EXISTS username TEXT"
                 )
+
+                if ADMIN_PASSWORD:
+                    pw_hash = bcrypt.hashpw(ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
+                    cur.execute(
+                        """
+                        INSERT INTO users (username, password_hash, is_admin)
+                        VALUES (%s, %s, TRUE)
+                        ON CONFLICT (username) DO NOTHING
+                        """,
+                        (ADMIN_USER, pw_hash),
+                    )
+                    logger.info("Admin account ensured for user '%s'", ADMIN_USER)
             logger.info("DB tables ready")
 
         except Exception as exc:
@@ -216,7 +259,12 @@ def auth_login(req: _AuthLoginRequest):
     conn = _get_db_conn()
 
     if conn is None:
-        return {"valid": False}
+        fallback_valid = bool(
+            ADMIN_PASSWORD
+            and req.username == ADMIN_USER
+            and req.password == ADMIN_PASSWORD
+        )
+        return {"valid": fallback_valid}
 
     try:
         with conn.cursor() as cur:
@@ -239,12 +287,19 @@ def auth_login(req: _AuthLoginRequest):
 
 @app.get("/health")
 async def health():
-    # async def runs directly on the event loop — never queued in the thread pool.
-    # This guarantees /health responds instantly even while MODEL.eval() is running.
+    # Health is OK when the default model is ready. Optional models lazy-load later.
     loaded = {name: (m is not None) for name, m in MODELS.items()}
-    if not all(loaded.values()):
-        return JSONResponse(status_code=503, content={"ok": False, "status": "loading", "models": loaded})
-    return {"ok": True, "models": loaded, "gpu": USE_GPU}
+    ready = loaded.get(DEFAULT_MODEL_TYPE, False)
+    body = {
+        "ok": ready,
+        "models": loaded,
+        "default_model": DEFAULT_MODEL_TYPE,
+        "gpu": USE_GPU,
+    }
+    if not ready:
+        body["status"] = "loading"
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 @app.get("/parameters")
@@ -294,9 +349,6 @@ async def segment(
             status_code=422,
             detail=f"Invalid model_type '{model_type}'. Must be one of: {list(MODELS.keys())}.",
         )
-    selected_model = MODELS[model_type]
-    if selected_model is None:
-        raise HTTPException(status_code=503, detail="Model is still loading, please retry in a few seconds.")
 
     # --- Input validation ---
     ext = os.path.splitext(image.filename or "")[1].lower()
@@ -330,6 +382,7 @@ async def segment(
 
     logger.info(f"Processing image: {image.filename}, shape={img.shape}")
     logger.info(f"Using model: {model_type}")
+    selected_model = await _ensure_model_loaded(model_type)
 
     # --- 3-D z-stack detection ---
     # Multi-frame TIFFs are segmented slice-by-slice; results stacked as (Z, H, W).
@@ -423,7 +476,7 @@ def get_projects(user: str | None = None):
         )
     try:
         with conn.cursor() as cur:
-            if user:
+            if user and user != ADMIN_USER:
                 cur.execute(
                     """
                     SELECT id, project_name, image_filename,

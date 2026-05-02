@@ -71,13 +71,14 @@ build-model:
   needs: [unit-test-model]
   script:
     # Compute a stable content hash from model source files only (not tests).
-    - MODEL_HASH=$(find ${CI_PROJECT_DIR}/Model_container -type f -not -path '*/tests/*' | sort | xargs sha256sum | sha256sum | cut -c1-12)
+    - MODEL_HASH=$(find ${CI_PROJECT_DIR}/Model_container -type f -not -path '*/tests/*' -not -path '*/__pycache__/*' -not -name '.DS_Store' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-12)
     - echo "MODEL_TAG=model-${MODEL_HASH}" > model_tag.env
     - echo "Building model image with tag model-${MODEL_HASH}"
     - /kaniko/executor
       --context "${CI_PROJECT_DIR}/Model_container"
       --dockerfile "${CI_PROJECT_DIR}/Model_container/Dockerfile"
-      --build-arg USE_CUDA=true
+      --build-arg BASE_IMAGE="${PUSH_REGISTRY}/${APP_NAME}-model-base:stable"
+      --build-arg INSTALL_REQUIREMENTS=false
       --destination "${PUSH_REGISTRY}/${APP_NAME}-model:model-${MODEL_HASH}"
       --cache=true
       --cache-repo "${PUSH_REGISTRY}/${APP_NAME}-model-cache"
@@ -100,16 +101,24 @@ deploy:
   needs: [build-app, build-model]
   script:
     - echo "Deploying app:${IMAGE_TAG}  model:${MODEL_TAG}"
+    - helm lint ./helm-chart
+    - helm template ${APP_NAME} ./helm-chart
+      --set-string app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
+      --set-string app.image.tag=${IMAGE_TAG}
+      --set-string model.image.repository=${PULL_REGISTRY}/${APP_NAME}-model
+      --set-string model.image.tag=${MODEL_TAG}
+      --set-string ingress.host=${APP_DOMAIN}
+      >/tmp/rendered.yaml
     - helm upgrade --install ${APP_NAME} ./helm-chart
-      --set app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
-      --set app.image.tag=${IMAGE_TAG}
-      --set model.image.repository=${PULL_REGISTRY}/${APP_NAME}-model
-      --set model.image.tag=${MODEL_TAG}
-      --set ingress.host=${APP_DOMAIN}
+      --set-string app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
+      --set-string app.image.tag=${IMAGE_TAG}
+      --set-string model.image.repository=${PULL_REGISTRY}/${APP_NAME}-model
+      --set-string model.image.tag=${MODEL_TAG}
+      --set-string ingress.host=${APP_DOMAIN}
       --namespace ${APP_NAME}
       --create-namespace
       --wait
-      --timeout 15m0s
+      --timeout 40m0s
   only:
     - main
 
@@ -119,16 +128,26 @@ verify:
   image: bitnami/kubectl:latest
   tags:
     - a40gpu
-  needs: [deploy]
   when: always
   script:
     - NS="$APP_NAME"
 
+    - echo "===== 0. NODE LABELS AND GPU RESOURCES ====="
+    - kubectl get nodes --show-labels || true
+    - kubectl describe nodes | grep -E 'Name:|nvidia.com/gpu|Allocatable|Allocated resources' -A 8 || true
+
     - echo "===== 1. POD STATUS ====="
-    - kubectl get pods -n "$NS" -o wide
+    - kubectl get pods -n "$NS" -o wide || true
+
+    - echo "===== 1b. DEPLOYMENTS ====="
+    - kubectl get deploy -n "$NS" -o wide || true
+    - kubectl describe deploy -n "$NS" || true
+
+    - echo "===== 1c. RECENT EVENTS ====="
+    - kubectl get events -n "$NS" --sort-by=.lastTimestamp | tail -80 || true
 
     - echo "===== 2. FULL MODEL POD DESCRIBE (includes OOMKill, probe failures) ====="
-    - kubectl describe pod -n "$NS" -l "app=${APP_NAME}-model"
+    - kubectl describe pod -n "$NS" -l "app=${APP_NAME}-model" || true
 
     - echo "===== 3. MODEL LOGS — current ====="
     - kubectl logs -n "$NS" -l "app=${APP_NAME}-model" --tail=100 || true
@@ -140,15 +159,15 @@ verify:
     - kubectl logs -n "$NS" -l "app=${APP_NAME}-app" --tail=50 || true
 
     - echo "===== 6. SERVICES AND ENDPOINTS ====="
-    - kubectl get svc -n "$NS"
-    - kubectl get endpoints -n "$NS"
+    - kubectl get svc -n "$NS" || true
+    - kubectl get endpoints -n "$NS" || true
 
     - echo "===== 7. NODE RESOURCES ====="
     - kubectl top nodes || echo "metrics-server not available"
     - kubectl top pods -n "$NS" || echo "metrics-server not available"
 
     - echo "===== 8. IMAGE PULL STATUS (are new images actually running?) ====="
-    - kubectl get pods -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{" image="}{.status.containerStatuses[0].image}{" state="}{.status.containerStatuses[0].state}{"\n"}{end}'
+    - kubectl get pods -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{" image="}{.status.containerStatuses[0].image}{" state="}{.status.containerStatuses[0].state}{"\n"}{end}' || true
 
     - echo "===== 9. WAIT FOR MODEL READY (up to 3 min) ====="
     - |
@@ -163,10 +182,21 @@ verify:
       done
 
     - echo "===== 10. HEALTH CHECK (direct TCP from app pod) ====="
-    - APP_POD=$(kubectl get pod -n "$NS" -l "app=${APP_NAME}-app" -o jsonpath='{.items[0].metadata.name}')
-    - kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,sys; r=httpx.get("http://cellpose-poc-model:8000/health",timeout=15); print("health:",r.status_code,r.text); sys.exit(0 if r.status_code==200 else 1)' || true
+    - |
+      APP_POD=$(kubectl get pod -n "$NS" -l "app=${APP_NAME}-app" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+      if [ -z "$APP_POD" ]; then
+        echo "No app pod found; skipping health and segment smoke tests."
+      else
+        kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,sys; r=httpx.get("http://cellpose-poc-model:8000/health",timeout=15); print("health:",r.status_code,r.text); sys.exit(0 if r.status_code==200 else 1)' || true
+      fi
 
     - echo "===== 11. SEGMENT TEST ====="
-    - kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,numpy as np,io; from PIL import Image; img=np.zeros((64,64,3),dtype=np.uint8); buf=io.BytesIO(); Image.fromarray(img).save(buf,format="PNG"); buf.seek(0); r=httpx.post("http://cellpose-poc-model:8000/segment",files={"image":("t.png",buf.getvalue(),"image/png")},data={"flow_threshold":"0.4","cellprob_threshold":"0.0"},timeout=600); print("segment:",r.status_code,"masks shape:",np.load(io.BytesIO(r.content)).shape if r.status_code==200 else r.text[:200])' || true
+    - |
+      APP_POD=$(kubectl get pod -n "$NS" -l "app=${APP_NAME}-app" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+      if [ -z "$APP_POD" ]; then
+        echo "No app pod found; skipping segment smoke test."
+      else
+        kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,numpy as np,io; from PIL import Image; img=np.zeros((64,64,3),dtype=np.uint8); buf=io.BytesIO(); Image.fromarray(img).save(buf,format="PNG"); buf.seek(0); r=httpx.post("http://cellpose-poc-model:8000/segment",files={"image":("t.png",buf.getvalue(),"image/png")},data={"flow_threshold":"0.4","cellprob_threshold":"0.0"},timeout=600); print("segment:",r.status_code,"masks shape:",np.load(io.BytesIO(r.content)).shape if r.status_code==200 else r.text[:200])' || true
+      fi
   only:
     - main

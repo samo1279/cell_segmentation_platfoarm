@@ -27,6 +27,7 @@ MODEL_REGISTER_URL = f"{_MODEL_BASE}/auth/register"
 MODEL_LOGIN_URL = f"{_MODEL_BASE}/auth/login"
 
 MODEL_API_KEY: str | None = os.getenv("MODEL_API_KEY") or None
+ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 
 
 # Tracks temp files from the previous call so they can be deleted at the start
@@ -354,7 +355,7 @@ def load_history(request: gr.Request = None):
     try:
         headers = {"X-API-Key": MODEL_API_KEY} if MODEL_API_KEY else {}
         username = getattr(request, "username", None) if request else None
-        params = {} if not username else {"user": username}
+        params = {} if not username or username == ADMIN_USER else {"user": username}
         resp = httpx.get(
             MODEL_PROJECTS_URL,
             headers=headers,
@@ -984,8 +985,23 @@ app = gr.mount_gradio_app(
     demo,
     path="/app",
     auth=_auth_fn,
-    auth_message="Please log in to continue.",
+    auth_message=(
+        "New user? "
+        "<a href='/register' style='color:#f97316;font-weight:600;text-decoration:underline'>"
+        "Create an account</a>"
+    ),
 )
+
+
+# Gradio's auth middleware intercepts "/" for unauthenticated requests and
+# redirects to the Gradio login page.  This middleware runs as the outermost
+# wrapper (added last = runs first) so it always returns our custom landing
+# page for the root path before Gradio's middleware ever sees the request.
+@app.middleware("http")
+async def _root_landing_middleware(request, call_next):
+    if request.url.path in ("/", ""):
+        return HTMLResponse(_LANDING_HTML)
+    return await call_next(request)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)

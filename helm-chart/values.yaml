@@ -5,6 +5,8 @@ app:
     tag: latest
     pullPolicy: IfNotPresent
   port: 8001
+  # nodeSelector: {}  # leave empty to schedule on any node
+  nodeSelector: {}
   resources:
     requests:
       cpu: 250m
@@ -25,6 +27,8 @@ model:
   useGpu: true
   # Number of GPUs to allocate per pod (nvidia.com/gpu resource limit).
   gpuCount: 1
+  # nodeSelector: {}  # GPU pods are scheduled by nvidia.com/gpu resource requests, not labels
+  nodeSelector: {}
   resources:
     requests:
       cpu: 500m
@@ -50,7 +54,10 @@ db:
   name: cellseg
   user: cellseg
   password: cellseg
+  # nodeSelector: {}  # leave empty to schedule on any node
+  nodeSelector: {}
 
-# --- Authentication ---
-# User accounts are created via /auth/register endpoint.
-# No pre-seeded admin account needed.
+# --- Admin account (auto-seeded at model startup when ADMIN_PASSWORD is set) ---
+admin:
+  username: admin
+  password: ""

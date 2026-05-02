@@ -26,6 +26,7 @@ services:
       # Leave blank to disable API key auth in local dev.
       # Set to a secret value to require X-API-Key on every /segment call.
       - MODEL_API_KEY=
+      - ADMIN_USER=admin
     depends_on:
       model:
         condition: service_healthy
@@ -51,6 +52,8 @@ services:
       - DATABASE_URL=postgresql://cellseg:${POSTGRES_PASSWORD:-cellseg}@db:5432/cellseg
       # Leave blank to disable API key auth.
       - API_KEY=
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     depends_on:
       db:
         condition: service_healthy
@@ -59,8 +62,8 @@ services:
       interval: 10s
       timeout: 10s
       retries: 15
-      # Cellpose loads two models at startup (cyto3 + cpsam). On CPU this takes
-      # up to 2 minutes — start_period prevents the health probe from firing early.
+      # Cellpose loads only the default model (cyto3) at startup.
+      # Optional models lazy-load on first request.
       start_period: 120s
     deploy:
       resources:

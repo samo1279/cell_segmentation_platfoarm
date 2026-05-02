@@ -13,8 +13,10 @@ spec:
       labels:
         app: {{ .Release.Name }}-app
     spec:
+      {{- with .Values.app.nodeSelector }}
       nodeSelector:
-        role: management
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: gradio
           image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
@@ -68,19 +70,18 @@ spec:
       labels:
         app: {{ .Release.Name }}-model
     spec:
-      # Schedule on a GPU node when useGpu=true.
-      # MicroK8s with 'microk8s enable gpu' labels GPU nodes with nvidia.com/gpu.present=true.
-      # When useGpu=false the pod runs on the management node (CPU-only).
-      {{- if .Values.model.useGpu }}
+      # GPU scheduling is driven by nvidia.com/gpu resource requests/limits below.
+      # The NVIDIA device plugin schedules the pod on a GPU node automatically.
+      # Set model.nodeSelector in values.yaml only if you need a specific node label.
+      {{- with .Values.model.nodeSelector }}
       nodeSelector:
-        nvidia.com/gpu.present: "true"
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.model.useGpu }}
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists
           effect: NoSchedule
-      {{- else }}
-      nodeSelector:
-        role: management
       {{- end }}
       # Wait for database to be ready before starting model container.
       # This prevents connection failures during model initialization.
@@ -164,8 +165,10 @@ spec:
       labels:
         app: {{ .Release.Name }}-db
     spec:
+      {{- with .Values.db.nodeSelector }}
       nodeSelector:
-        role: management
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: postgres
           image: {{ .Values.db.image }}

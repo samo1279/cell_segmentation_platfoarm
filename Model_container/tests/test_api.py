@@ -123,10 +123,17 @@ class TestHealth:
         body = c.get("/health").json()
         assert body["ok"] is False
 
-    def test_partial_load_returns_503(self, monkeypatch):
-        """If only one of the two models is loaded, health must be 503."""
+    def test_partial_optional_model_load_still_ready(self, monkeypatch):
+        """Readiness depends on the default model; optional models lazy-load later."""
         monkeypatch.setitem(model_app.MODELS, "cyto3", _FakeModel())
         monkeypatch.setitem(model_app.MODELS, "cpsam", None)
+        c = TestClient(model_app.app)
+        r = c.get("/health")
+        assert r.status_code == 200
+
+    def test_default_model_missing_returns_503(self, monkeypatch):
+        monkeypatch.setitem(model_app.MODELS, "cyto3", None)
+        monkeypatch.setitem(model_app.MODELS, "cpsam", _FakeModel())
         c = TestClient(model_app.app)
         r = c.get("/health")
         assert r.status_code == 503
@@ -202,16 +209,17 @@ class TestSegmentValidation:
         )
         assert "too large" in r.json()["detail"].lower()
 
-    def test_model_still_loading_returns_503(self, monkeypatch):
+    def test_model_lazy_loads_when_missing(self, monkeypatch):
         monkeypatch.setitem(model_app.MODELS, "cyto3", None)
         monkeypatch.setitem(model_app.MODELS, "cpsam", _FakeModel())
+        monkeypatch.setattr(model_app, "_load_model_sync", lambda name: _FakeModel())
         c = TestClient(model_app.app)
         r = c.post(
             "/segment",
             files={"image": ("img.png", _make_png(), "image/png")},
             data={"model_type": "cyto3"},
         )
-        assert r.status_code == 503
+        assert r.status_code == 200
 
 
 # ---------------------------------------------------------------------------

@@ -1,10 +1,36 @@
-# Code-only layer — built every commit, pulls in seconds.
-# The heavy base (CUDA torch + weights) is in Dockerfile.base, tagged :stable.
-# The GPU node already has :stable cached, so only this thin diff is transferred.
-# BASE_IMAGE must be passed as --build-arg from CI using PUSH_REGISTRY (node IP).
-# localhost:32000 is NOT a valid default for Kaniko (localhost = the pod, not the node).
-ARG BASE_IMAGE=10.136.94.110:32000/cellpose-poc-model-base:stable
+# Runtime image for the FastAPI / Cellpose model service.
+#
+# Local development (default): builds from python:3.11-slim and installs all
+# requirements including CPU-only PyTorch.
+#
+# CI/CD (fast path): pass BASE_IMAGE=<registry>/cellpose-poc-model-base:stable
+# and INSTALL_REQUIREMENTS=false to reuse the prebuilt CUDA/Cellpose/weights
+# layer. Only the thin COPY app.py layer is rebuilt per commit.
+ARG BASE_IMAGE=python:3.11-slim
 FROM ${BASE_IMAGE}
+
+ARG INSTALL_REQUIREMENTS=true
+ARG USE_CUDA=false
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN if [ "${INSTALL_REQUIREMENTS}" = "true" ]; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends curl ca-certificates && \
+      rm -rf /var/lib/apt/lists/* && \
+      pip install --no-cache-dir -r requirements.txt && \
+      if [ "${USE_CUDA}" = "true" ]; then \
+        pip install --no-cache-dir --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121; \
+      fi; \
+    else \
+      if ! command -v curl >/dev/null 2>&1; then \
+        apt-get update && \
+        apt-get install -y --no-install-recommends curl ca-certificates && \
+        rm -rf /var/lib/apt/lists/*; \
+      fi; \
+    fi
 
 # Re-copy only the application source — everything else is inherited from base.
 COPY cellpose_api/app.py .
