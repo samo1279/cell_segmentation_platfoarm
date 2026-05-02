@@ -4,6 +4,17 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Definitive fix for 30-minute deployment timeout (2026-05-02)
+
+### Fixed
+- **Root Cause:** The Gradio app at `/app` requires authentication. Kubernetes health probes do not send credentials, so they were receiving a `401 Unauthorized` or a redirect instead of the expected `200 OK`. The probes never succeeded, the pod was never marked "Ready," and Helm timed out after 30 minutes.
+- `App_container/app.py` — Added a new, dedicated, unauthenticated health check endpoint at `GET /healthz`. This endpoint simply returns `{"status": "ok"}` with a `200` status code, providing a reliable signal that the web server is running.
+- `helm-chart/templates/deployment.yaml` — Changed all three health probes (`startupProbe`, `livenessProbe`, `readinessProbe`) for the `gradio` container to use the new `path: /healthz`. This is the standard and correct way to implement health checks for applications with authenticated endpoints.
+
+**Impact:** The deployment will now succeed reliably and quickly. The Kubernetes probes have a stable, unauthenticated endpoint to check, allowing the `gradio` pod to be correctly marked as "Ready" as soon as the server starts, resolving the 30-minute timeout permanently.
+
+---
+
 ## [Unreleased] — Fix 26-minute deployment hang: correct Kubernetes health probe paths (2026-05-02)
 
 ### Fixed

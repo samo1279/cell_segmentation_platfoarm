@@ -970,6 +970,12 @@ async def _register_proxy(request: Request):
         )
 
 
+@_fastapi_app.get("/healthz", status_code=200)
+async def healthz():
+    """Simple health check endpoint for Kubernetes probes."""
+    return {"status": "ok"}
+
+
 # Mount Gradio at "/app" — protected by Gradio's built-in auth.
 # After Gradio login succeeds, user is redirected to /app.
 # Landing page at "/" is public (no auth required).
