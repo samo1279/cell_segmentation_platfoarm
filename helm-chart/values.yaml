@@ -52,8 +52,5 @@ db:
   password: cellseg
 
 # --- Authentication ---
-# Admin account seeded at Model Container startup.
-# Matches compose.yaml pattern. Change before production deploy.
-admin:
-  username: admin
-  password: OstfaliaAdmin2026
+# User accounts are created via /auth/register endpoint.
+# No pre-seeded admin account needed.

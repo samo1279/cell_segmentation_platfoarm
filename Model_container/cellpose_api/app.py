@@ -24,13 +24,6 @@ USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
 DATABASE_URL = os.environ.get("DATABASE_URL")
 API_KEY: str | None = os.environ.get("API_KEY") or None
 
-# Admin account seeded at startup.
-# Set ADMIN_USER + ADMIN_PASSWORD in the environment before first launch.
-# The admin account is created once; changing the password env var does NOT
-# update an existing hash (use the /auth/register endpoint or psql directly).
-ADMIN_USER: str | None = os.environ.get("ADMIN_USER") or None
-ADMIN_PASSWORD: str | None = os.environ.get("ADMIN_PASSWORD") or None
-
 # ---------------------------------------------------------------------------
 # Pydantic request bodies for auth endpoints
 # ---------------------------------------------------------------------------
@@ -124,7 +117,6 @@ async def lifespan(app: FastAPI):
                         id            SERIAL PRIMARY KEY,
                         username      TEXT UNIQUE NOT NULL,
                         password_hash TEXT NOT NULL,
-                        is_admin      BOOLEAN NOT NULL DEFAULT FALSE,
                         created_at    TIMESTAMPTZ DEFAULT NOW()
                     )
                     """
@@ -149,21 +141,6 @@ async def lifespan(app: FastAPI):
                 )
             logger.info("DB tables ready")
 
-            # Seed admin account (once; existing hash is never overwritten)
-            if ADMIN_USER and ADMIN_PASSWORD:
-                pw_hash = bcrypt.hashpw(
-                    ADMIN_PASSWORD.encode(), bcrypt.gensalt()
-                ).decode()
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO users (username, password_hash, is_admin)
-                        VALUES (%s, %s, TRUE)
-                        ON CONFLICT (username) DO NOTHING
-                        """,
-                        (ADMIN_USER, pw_hash),
-                    )
-                logger.info("Admin account '%s' ensured in DB", ADMIN_USER)
         except Exception as exc:
             logger.warning("DB table setup failed: %s", exc)
     else:
@@ -220,7 +197,7 @@ def auth_register(req: _AuthRegisterRequest):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, FALSE)",
+                "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
                 (req.username, pw_hash),
             )
     except psycopg2.IntegrityError:
@@ -235,41 +212,29 @@ def auth_register(req: _AuthRegisterRequest):
 
 @app.post("/auth/login")
 def auth_login(req: _AuthLoginRequest):
-    """Verify credentials.  Returns ``{"valid": bool, "is_admin": bool}``.
-
-    When no database is configured, falls back to the ADMIN_USER / ADMIN_PASSWORD
-    environment variables so the app remains usable in dev mode.
-    """
+    """Verify credentials. Returns {valid: bool}."""
     conn = _get_db_conn()
 
     if conn is None:
-        # Dev-mode fallback: accept the env-var admin credentials
-        if (
-            ADMIN_USER
-            and ADMIN_PASSWORD
-            and req.username == ADMIN_USER
-            and req.password == ADMIN_PASSWORD
-        ):
-            return {"valid": True, "is_admin": True}
-        return {"valid": False, "is_admin": False}
+        return {"valid": False}
 
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT password_hash, is_admin FROM users WHERE username = %s",
+                "SELECT password_hash FROM users WHERE username = %s",
                 (req.username,),
             )
             row = cur.fetchone()
     except Exception as exc:
         logger.error("Login DB error: %s", exc)
-        return {"valid": False, "is_admin": False}
+        return {"valid": False}
 
     if not row:
-        return {"valid": False, "is_admin": False}
+        return {"valid": False}
 
-    pw_hash, is_admin = row
+    pw_hash = row[0]
     valid = bcrypt.checkpw(req.password.encode(), pw_hash.encode())
-    return {"valid": bool(valid), "is_admin": bool(is_admin)}
+    return {"valid": bool(valid)}
 
 
 @app.get("/health")
@@ -445,8 +410,7 @@ async def segment(
 def get_projects(user: str | None = None):
     """Return the last 100 segmentation records ordered by most-recent first.
 
-    Pass ``?user=alice`` to restrict results to a single user.  Omit the
-    parameter (or use it only from an admin caller) to retrieve all records.
+    Pass ``?user=alice`` to restrict results to a single user.
 
     Returns 503 when the container is running without a database (DATABASE_URL
     not set), so callers can detect the degraded-mode case cleanly.

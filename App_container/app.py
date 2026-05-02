@@ -27,8 +27,7 @@ MODEL_REGISTER_URL = f"{_MODEL_BASE}/auth/register"
 MODEL_LOGIN_URL = f"{_MODEL_BASE}/auth/login"
 
 MODEL_API_KEY: str | None = os.getenv("MODEL_API_KEY") or None
-# ADMIN_USER — if set, this username bypasses the per-user history filter and sees all records.
-ADMIN_USER: str | None = os.getenv("ADMIN_USER") or None
+
 
 # Tracks temp files from the previous call so they can be deleted at the start
 # of the next call (after Gradio has already served them to the browser).
@@ -350,14 +349,12 @@ def export_csv(stats_df):
 def load_history(request: gr.Request = None):
     """Fetch past segmentation jobs from GET /projects.
 
-    When a user is logged in, only their own records are returned.
-    If the user matches ADMIN_USER, all records are returned (no filter).
+    Each user sees only their own segmentation records.
     """
     try:
         headers = {"X-API-Key": MODEL_API_KEY} if MODEL_API_KEY else {}
         username = getattr(request, "username", None) if request else None
-        is_admin = (username is not None and username == ADMIN_USER)
-        params = {} if (is_admin or not username) else {"user": username}
+        params = {} if not username else {"user": username}
         resp = httpx.get(
             MODEL_PROJECTS_URL,
             headers=headers,
