@@ -8,7 +8,6 @@ FROM ${BASE_IMAGE}
 
 # Re-copy only the application source — everything else is inherited from base.
 COPY cellpose_api/app.py .
-COPY cellpose_api/tasks.py .
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
