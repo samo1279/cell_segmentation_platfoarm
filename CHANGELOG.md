@@ -4,7 +4,7 @@ All notable changes to the Cell Segmentation Platform (POC v1) will be documente
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Definitive fix for 30-minute deployment timeout (2026-05-02)
+## [Unreleased]
 
 ### Fixed
 - **Root Cause:** The Gradio app at `/app` requires authentication. Kubernetes health probes do not send credentials, so they were receiving a `401 Unauthorized` or a redirect instead of the expected `200 OK`. The probes never succeeded, the pod was never marked "Ready," and Helm timed out after 30 minutes.
@@ -48,7 +48,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `Model_container/Dockerfile` — replaced two-layer build (BASE_IMAGE + missing Dockerfile.base) with self-contained single-stage build following official Docker best practices; `ARG USE_CUDA=false` default enables local CPU builds; `USE_CUDA=true` swaps CUDA 12.1 wheels for server GPU builds; pre-downloads cyto3 and cpsam model weights at build time; removed hardcoded private IP `10.136.94.110:32000`
 - `.gitlab-ci.yml` — replaced `--build-arg BASE_IMAGE=...` with `--build-arg USE_CUDA=true` matching Dockerfile specification and compose.yaml pattern
 - `helm-chart/values.yaml` — added `admin.username` and `admin.password` configuration matching `compose.yaml` and `.env.example` documentation
-- `helm-chart/templates/deployment.yaml` — added `ADMIN_USER` and `ADMIN_PASSWORD` environment variables to model container enabling admin account seeding on Kubernetes deployment
 
 ### Added
 - `document/ARCHITECTURE_REVIEW.md` — comprehensive analysis documenting all build problems, root causes, and solutions with official Docker/Kubernetes/Gradio documentation references

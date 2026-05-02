@@ -972,7 +972,7 @@ async def _register_proxy(request: Request):
 
 @_fastapi_app.get("/healthz", status_code=200)
 async def healthz():
-    """Simple health check endpoint for Kubernetes probes."""
+    """Simple, unauthenticated health check endpoint for Kubernetes probes."""
     return {"status": "ok"}
 
 
