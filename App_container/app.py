@@ -671,87 +671,224 @@ with gr.Blocks(title="Cell Segmentation - Cellpose", max_file_size="50mb") as de
 demo.queue()
 
 # ---------------------------------------------------------------------------
-# Registration page — plain HTML served as a standard FastAPI GET route.
-# Defined on the FastAPI host app BEFORE gr.mount_gradio_app so it takes
-# priority over the Gradio mount at "/".
-# Ref: https://www.gradio.app/docs/gradio/mount_gradio_app
+# Unified auth landing page — served at "/" (before Gradio mount at "/app").
+# Two tabs: Sign In (POSTs to Gradio's /app/login) and Create Account (AJAX).
+# URL layout:
+#   /          → this landing page (sign-in / create-account tabs)
+#   /app       → Gradio app (protected by Gradio auth)
+#   /auth/register → registration proxy to model container
 # ---------------------------------------------------------------------------
 
-_REGISTER_HTML = """\
+_AUTH_HTML = """\
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Register — Cell Segmentation Platform</title>
+  <title>Cell Segmentation Platform</title>
   <style>
-    body{font-family:system-ui,sans-serif;max-width:420px;margin:80px auto;padding:0 20px;color:#111}
-    h1{font-size:1.3em;margin-bottom:0}
-    h2{font-size:1em;font-weight:normal;color:#555;margin-top:4px}
-    label{display:block;margin-top:14px;font-size:.9em;font-weight:600}
-    input{width:100%;padding:8px 10px;margin-top:4px;border:1px solid #ccc;
-          border-radius:6px;box-sizing:border-box;font-size:1em}
-    button{margin-top:20px;width:100%;padding:10px;background:#f97316;
-           color:#fff;border:none;border-radius:6px;font-size:1em;cursor:pointer}
-    button:hover{background:#ea6c08}
-    #msg{margin-top:14px;padding:10px 14px;border-radius:6px;display:none;font-size:.95em}
-    .ok{background:#d1fae5;color:#065f46}
-    .err{background:#fee2e2;color:#991b1b}
-    a{color:#f97316}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:system-ui,-apple-system,sans-serif;
+      min-height:100vh;
+      background:linear-gradient(135deg,#0f172a 0%,#1e293b 60%,#0f172a 100%);
+      display:flex;align-items:center;justify-content:center;
+      padding:20px;
+    }
+    .card{
+      background:#fff;border-radius:16px;padding:40px 44px;
+      width:100%;max-width:420px;
+      box-shadow:0 24px 60px rgba(0,0,0,.35);
+    }
+    .logo{
+      display:flex;align-items:center;gap:10px;margin-bottom:6px;
+    }
+    .logo svg{width:32px;height:32px}
+    .logo-text{font-size:1.1em;font-weight:700;color:#0f172a;letter-spacing:-.3px}
+    .subtitle{font-size:.85em;color:#64748b;margin-bottom:28px}
+    /* tabs */
+    .tabs{display:flex;border-bottom:2px solid #f1f5f9;margin-bottom:28px}
+    .tab{
+      flex:1;padding:10px 0;font-size:.95em;font-weight:600;
+      color:#94a3b8;cursor:pointer;text-align:center;
+      border-bottom:2px solid transparent;margin-bottom:-2px;
+      transition:color .2s,border-color .2s;background:none;border-top:none;border-left:none;border-right:none;
+    }
+    .tab.active{color:#f97316;border-bottom-color:#f97316}
+    .tab:hover:not(.active){color:#475569}
+    /* panels */
+    .panel{display:none}.panel.active{display:block}
+    label{display:block;margin-top:16px;font-size:.82em;font-weight:600;color:#374151;letter-spacing:.3px;text-transform:uppercase}
+    input[type=text],input[type=password]{
+      width:100%;padding:10px 12px;margin-top:5px;
+      border:1.5px solid #e2e8f0;border-radius:8px;
+      font-size:.97em;color:#0f172a;transition:border-color .15s;
+      outline:none;
+    }
+    input:focus{border-color:#f97316;box-shadow:0 0 0 3px rgba(249,115,22,.12)}
+    .btn{
+      margin-top:22px;width:100%;padding:11px;
+      background:#f97316;color:#fff;border:none;border-radius:8px;
+      font-size:1em;font-weight:600;cursor:pointer;
+      transition:background .15s,transform .1s;
+    }
+    .btn:hover{background:#ea6c08}.btn:active{transform:scale(.98)}
+    .btn:disabled{background:#fdba74;cursor:not-allowed}
+    .msg{
+      margin-top:14px;padding:10px 14px;border-radius:8px;
+      font-size:.9em;display:none;line-height:1.45;
+    }
+    .msg.ok{background:#d1fae5;color:#065f46;display:block}
+    .msg.err{background:#fee2e2;color:#991b1b;display:block}
+    .footer-note{margin-top:20px;font-size:.82em;color:#94a3b8;text-align:center}
+    a{color:#f97316;text-decoration:none}.a:hover{text-decoration:underline}
+    .spinner{display:inline-block;width:14px;height:14px;border:2px solid #fff;
+      border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+    @keyframes spin{to{transform:rotate(360deg)}}
   </style>
 </head>
 <body>
-  <h1>Cell Segmentation Platform</h1>
-  <h2>Create a new account</h2>
-  <p style="font-size:.9em">Already have an account? <a href="/">Log in</a></p>
-  <form id="frm">
-    <label>Username</label>
-    <input id="u" type="text" placeholder="3–50 chars — letters, digits, underscore" required>
-    <label>Password</label>
-    <input id="p" type="password" placeholder="Minimum 8 characters" required>
-    <label>Confirm password</label>
-    <input id="c" type="password" required>
-    <button type="submit">Create account</button>
-  </form>
-  <div id="msg"></div>
-  <script>
-    document.getElementById('frm').addEventListener('submit', async function(e){
-      e.preventDefault();
-      const u=document.getElementById('u').value.trim();
-      const p=document.getElementById('p').value;
-      const c=document.getElementById('c').value;
-      if(p!==c){show('Passwords do not match.',false);return;}
-      const r=await fetch('/auth/register',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({username:u,password:p})
-      });
-      const d=await r.json();
-      if(r.ok){show((d.message||'Account created!')+' — <a href="/">Go to login</a>',true);this.reset();}
-      else{show(d.detail||'Registration failed.',false);}
+<div class="card">
+  <div class="logo">
+    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="16" cy="16" r="15" stroke="#f97316" stroke-width="2"/>
+      <circle cx="16" cy="16" r="7" fill="#f97316" opacity=".2"/>
+      <circle cx="16" cy="16" r="3" fill="#f97316"/>
+      <circle cx="8"  cy="10" r="2.5" fill="#f97316" opacity=".6"/>
+      <circle cx="24" cy="10" r="2.5" fill="#f97316" opacity=".6"/>
+      <circle cx="8"  cy="22" r="2.5" fill="#f97316" opacity=".6"/>
+      <circle cx="24" cy="22" r="2.5" fill="#f97316" opacity=".6"/>
+    </svg>
+    <span class="logo-text">Cell Segmentation Platform</span>
+  </div>
+  <p class="subtitle">AI-powered cell analysis with Cellpose</p>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('signin',this)">Sign In</button>
+    <button class="tab"        onclick="switchTab('signup',this)">Create Account</button>
+  </div>
+
+  <!-- Sign In panel -->
+  <div id="panel-signin" class="panel active">
+    <form id="frm-signin" action="/app/login" method="post">
+      <label>Username</label>
+      <input type="text" name="username" id="si-user" autocomplete="username" required>
+      <label>Password</label>
+      <input type="password" name="password" id="si-pass" autocomplete="current-password" required>
+      <button class="btn" type="submit" id="si-btn">Sign In</button>
+    </form>
+    <div id="msg-signin" class="msg"></div>
+    <p class="footer-note">No account yet?
+      <a href="#" onclick="switchTab('signup',document.querySelectorAll('.tab')[1]);return false">Create one free</a>
+    </p>
+  </div>
+
+  <!-- Create Account panel -->
+  <div id="panel-signup" class="panel">
+    <form id="frm-signup">
+      <label>Username</label>
+      <input type="text" id="su-user" autocomplete="username"
+             placeholder="3–50 chars — letters, digits, underscore" required>
+      <label>Password</label>
+      <input type="password" id="su-pass" autocomplete="new-password"
+             placeholder="Minimum 8 characters" required>
+      <label>Confirm Password</label>
+      <input type="password" id="su-conf" autocomplete="new-password" required>
+      <button class="btn" type="submit" id="su-btn">Create Account</button>
+    </form>
+    <div id="msg-signup" class="msg"></div>
+    <p class="footer-note">Already have an account?
+      <a href="#" onclick="switchTab('signin',document.querySelectorAll('.tab')[0]);return false">Sign in</a>
+    </p>
+  </div>
+</div>
+
+<script>
+function switchTab(name, tabEl) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  tabEl.classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
+}
+
+// Sign-in: show error inline if Gradio redirects back with ?error
+(function(){
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('error')) {
+    const el = document.getElementById('msg-signin');
+    el.textContent = 'Incorrect username or password.';
+    el.className = 'msg err';
+  }
+})();
+
+// Sign-in form: show spinner on submit
+document.getElementById('frm-signin').addEventListener('submit', function(){
+  const btn = document.getElementById('si-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Signing in…';
+});
+
+// Create Account: AJAX submit
+document.getElementById('frm-signup').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const u = document.getElementById('su-user').value.trim();
+  const p = document.getElementById('su-pass').value;
+  const c = document.getElementById('su-conf').value;
+  const msg = document.getElementById('msg-signup');
+  const btn = document.getElementById('su-btn');
+
+  msg.className = 'msg'; msg.textContent = '';
+
+  if (p !== c) { showMsg(msg, 'Passwords do not match.', false); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Creating account…';
+
+  try {
+    const r = await fetch('/auth/register', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: u, password: p})
     });
-    function show(t,ok){
-      const el=document.getElementById('msg');
-      el.innerHTML=t;el.className=ok?'ok':'err';el.style.display='block';
+    const d = await r.json();
+    if (r.ok) {
+      showMsg(msg, (d.message || 'Account created!') + ' You can now sign in.', true);
+      this.reset();
+      setTimeout(() => {
+        switchTab('signin', document.querySelectorAll('.tab')[0]);
+        document.getElementById('si-user').value = u;
+      }, 1800);
+    } else {
+      showMsg(msg, d.detail || 'Registration failed.', false);
     }
-  </script>
+  } catch(_) {
+    showMsg(msg, 'Network error — please try again.', false);
+  }
+  btn.disabled = false;
+  btn.textContent = 'Create Account';
+});
+
+function showMsg(el, text, ok) {
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+</script>
 </body>
 </html>
 """
 
 # ---------------------------------------------------------------------------
 # FastAPI host application.
-# /register and /auth/register are standard FastAPI route handlers defined
-# BEFORE gr.mount_gradio_app so they are checked first by Starlette's router.
-# Official mounting API: https://www.gradio.app/docs/gradio/mount_gradio_app
+# Routes defined BEFORE gr.mount_gradio_app are matched first by Starlette.
 # ---------------------------------------------------------------------------
 
 _fastapi_app = FastAPI()
 
 
-@_fastapi_app.get("/register")
-async def _register_page():
-    return HTMLResponse(_REGISTER_HTML)
+@_fastapi_app.get("/")
+async def _landing_page():
+    """Unified Sign In / Create Account landing page."""
+    return HTMLResponse(_AUTH_HTML)
 
 
 @_fastapi_app.post("/auth/register")
@@ -772,19 +909,15 @@ async def _register_proxy(request: Request):
         )
 
 
-# Mount Gradio at "/" using the official API.
-# auth= accepts any callable (username, password) -> bool per Gradio docs.
-# auth_message= is rendered as HTML inside the Gradio login page — the <a> tag
-# creates a clickable "Register here" link visible before login.
+# Gradio mounted at "/app" so our custom "/" landing page is served first.
+# The Sign In form on the landing page POSTs to "/app/login" (Gradio's endpoint).
+# After successful login Gradio redirects the user to "/app".
 app = gr.mount_gradio_app(
     _fastapi_app,
     demo,
-    path="/",
+    path="/app",
     auth=_auth_fn,
-    auth_message=(
-        "Cell Segmentation Platform — please log in.<br>"
-        "No account yet? <a href='/register'>Register here</a>"
-    ),
+    auth_message="Cell Segmentation Platform — please log in.",
 )
 
 if __name__ == "__main__":
