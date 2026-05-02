@@ -109,6 +109,10 @@ deploy:
       --set-string model.image.tag=${MODEL_TAG}
       --set-string ingress.host=${APP_DOMAIN}
       >/tmp/rendered.yaml
+    # If a previous deploy was interrupted, Helm leaves a "pending" lock that
+    # blocks all future upgrades.  Roll back to the last good release to clear
+    # it.  If no previous release exists the rollback fails silently (|| true).
+    - helm rollback ${APP_NAME} --namespace ${APP_NAME} 2>/dev/null || true
     - helm upgrade --install ${APP_NAME} ./helm-chart
       --set-string app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
       --set-string app.image.tag=${IMAGE_TAG}
@@ -118,7 +122,7 @@ deploy:
       --namespace ${APP_NAME}
       --create-namespace
       --wait
-      --timeout 40m0s
+      --timeout 12m0s
   only:
     - main
 
