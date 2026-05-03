@@ -480,7 +480,7 @@ _MODEL_INFO = (
     "Best accuracy for difficult or low-contrast images."
 )
 
-with gr.Blocks(title="Cell Segmentation - Cellpose", max_file_size="50mb") as demo:
+with gr.Blocks(title="Cell Segmentation - Cellpose") as demo:
     gr.Markdown("# Cell Segmentation (Cellpose)")
     gr.Markdown("Upload a microscopy image, adjust parameters, and get segmentation results.")
 
