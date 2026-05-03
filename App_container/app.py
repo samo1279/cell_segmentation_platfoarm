@@ -785,12 +785,12 @@ _SIGNIN_HTML = """\
 <div class="card">
   <h1>Sign In</h1>
   <p class="subtitle">Welcome back to Cell Segmentation Platform</p>
-  <form id="frm" action="/app/login" method="post">
+  <form id="frm">
     <label>Username</label>
-    <input type="text" name="username" required autofocus>
+    <input type="text" name="username" id="username" required autofocus>
     <label>Password</label>
-    <input type="password" name="password" required>
-    <button class="btn" type="submit">Sign In</button>
+    <input type="password" name="password" id="password" required>
+    <button class="btn" type="submit" id="btn">Sign In</button>
   </form>
   <div class="err" id="err"></div>
   <div class="links">
@@ -804,6 +804,42 @@ if (params.get('error')) {
   el.textContent = 'Incorrect username or password. Please try again.';
   el.classList.add('show');
 }
+
+document.getElementById('frm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const btn = document.getElementById('btn');
+  const errEl = document.getElementById('err');
+  errEl.classList.remove('show');
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+
+  const body = new URLSearchParams();
+  body.set('username', document.getElementById('username').value);
+  body.set('password', document.getElementById('password').value);
+
+  try {
+    const res = await fetch('/app/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: body.toString(),
+      credentials: 'include',
+    });
+    const data = await res.json();
+    if (data.success) {
+      window.location.href = '/app';
+    } else {
+      errEl.textContent = 'Incorrect username or password. Please try again.';
+      errEl.classList.add('show');
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  } catch (err) {
+    errEl.textContent = 'Connection error. Please try again.';
+    errEl.classList.add('show');
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+});
 </script>
 </body>
 </html>
