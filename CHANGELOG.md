@@ -6,14 +6,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Fixed
-- **Deployment Timeout**: Corrected the application structure in `App_container/app.py`. The `GET /healthz` endpoint is now defined on the main `FastAPI` instance before the Gradio application is mounted, ensuring Kubernetes health probes receive a `200 OK` response and the deployment can complete successfully.
+### Added
+- `App_container/templates/` — three HTML template files extracted from inline Python strings: `landing.html`, `signin.html`, `register.html`. Pages served by FastAPI before the Gradio auth layer.
+- `helm-chart/templates/secrets.yaml` — Kubernetes `Secret` resource for the database password; referenced via `secretKeyRef` in the model container deployment.
+- `document/architecture_guide.md` — comprehensive 13-chapter architecture guide covering: motivation, monolith vs microservices theory, Docker containerisation, Docker Compose local dev, three-service design, API contract, network and security architecture, Kubernetes concepts, Helm, GPU inference, CI/CD pipeline, and trade-offs.
 
 ### Changed
-- **Documentation**: Consolidated numerous redundant markdown files in the `document/` directory into a single, coherent summary: `document/DEPLOYMENT_FIXES_HELM_TIMEOUT.md`. This makes the project's documentation easier to navigate and maintain.
+- `App_container/app.py` — dead `_SIGNIN_HTML_UNUSED` and `_REGISTER_HTML_UNUSED` string blocks (~225 lines) removed; HTML content now loaded from `templates/` via `_load_template()`.
+- `App_container/app.py` — security headers middleware added to all responses: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-XSS-Protection: 0`.
+- `App_container/Dockerfile` — added `COPY templates/ templates/` so HTML templates are baked into the Docker image.
+- `Model_container/cellpose_api/app.py` — image decode error message changed to generic text to prevent information disclosure (OWASP A02).
+- `Model_container/cellpose_api/app.py` — filename in log messages sanitised with `os.path.basename()` to prevent log injection.
+- `helm-chart/templates/deployment.yaml` — database password now sourced from Kubernetes Secret via `secretKeyRef` instead of being inlined from `values.yaml`.
+- `helm-chart/values.yaml` — `db.password` placeholder changed to empty string; must be supplied via `--set db.password=...` at deploy time.
+- `.gitlab-ci.yml` — `--set-string db.password=$DB_PASSWORD` added to both `helm template` and `helm upgrade --install` commands.
+- `README.md` — full rewrite with two clear sections: Local Development (Docker Compose, CPU) and Server Deployment (Kubernetes + Helm + GitLab CI), plus updated API reference and project structure.
 
 ### Removed
-- Deleted 13 redundant markdown files from the `document/` directory and the project root, including `chapter3.md` and various debug logs, as their content is now preserved in the new summary document.
+- `.github/plan.md` — superseded planning file deleted.
+- `.github/plan2.md` — superseded planning file deleted.
+- `document/Base--File.docx` — binary Word document removed from repository.
+- `document/Chapter3_Methodology.docx` — binary Word document removed from repository.
+- `document/~$apter3_Methodology.docx` — binary Word lock file removed from repository.
+- `document/chapter3_v2.md` — superseded chapter draft deleted.
+- `document/systemexplaination.md` — superseded explanation document deleted.
+- `document/DEPLOYMENT_FIXES_HELM_TIMEOUT.md` — fix notes superseded by CHANGELOG deleted.
 
 - `Model_container/requirements.txt` — `bcrypt` package for secure password hashing.
 - `Model_container/cellpose_api/app.py` — `users` table: `(id, username UNIQUE, password_hash, is_admin, created_at)`.
