@@ -1,6 +1,7 @@
 stages:
   - test
   - build
+  - rotate-db-password
   - deploy
   - verify
 
@@ -93,12 +94,39 @@ build-model:
 # App image uses commit SHA (changes every push).
 # Model image uses content hash (unchanged unless model files changed) so
 # the GPU node never re-pulls the 6.8 GB image unless necessary.
+
+# ── Rotate DB password — sync the running PostgreSQL password with DB_PASSWORD ─
+rotate-db-password:
+  stage: rotate-db-password
+  image: bitnami/kubectl:latest
+  tags:
+    - a40gpu
+  needs: [build-app, build-model]
+  script:
+    - NS="$APP_NAME"
+    - echo "Rotating DB password to match CI variable DB_PASSWORD..."
+    - |
+      DB_POD=$(kubectl get pod -n "$NS" -l "app=${APP_NAME}-db" \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+      if [ -z "$DB_POD" ]; then
+        echo "No running DB pod found — skipping password rotation (first deploy)."
+      else
+        echo "Running ALTER USER on pod $DB_POD"
+        kubectl exec -n "$NS" "$DB_POD" -- \
+          psql -U cellseg -d cellseg \
+          -c "ALTER USER cellseg WITH PASSWORD '${DB_PASSWORD}';"
+        echo "Password rotation complete."
+      fi
+  only:
+    - main
+
 deploy:
   stage: deploy
   image: alpine/helm:3.14.0
   tags:
     - a40gpu
-  needs: [build-app, build-model]
+  needs: [build-app, build-model, rotate-db-password]
   script:
     - echo "Deploying app:${IMAGE_TAG}  model:${MODEL_TAG}"
     - helm lint ./helm-chart
