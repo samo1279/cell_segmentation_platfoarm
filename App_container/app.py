@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from PIL import Image
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 import uvicorn
 
 # ---------------------------------------------------------------------------
@@ -826,7 +826,7 @@ document.getElementById('frm').addEventListener('submit', async function(e) {
     });
     const data = await res.json();
     if (data.success) {
-      window.location.href = '/app';
+      window.location.href = '/app/';
     } else {
       errEl.textContent = 'Incorrect username or password. Please try again.';
       errEl.classList.add('show');
@@ -1036,8 +1036,17 @@ app = gr.mount_gradio_app(
 # page for the root path before Gradio's middleware ever sees the request.
 @app.middleware("http")
 async def _root_landing_middleware(request, call_next):
-    if request.url.path in ("/", ""):
+    path = request.url.path
+    if path in ("/", ""):
         return HTMLResponse(_LANDING_HTML)
+    # Intercept Gradio's built-in login page redirect to break the
+    # /app <-> /app/login loop caused by stale/invalid session cookies.
+    # Clear the stale cookies and send the user to our custom sign-in page.
+    if path == "/app/login" and request.method == "GET":
+        resp = RedirectResponse("/sign-in", status_code=302)
+        resp.delete_cookie("access-token", path="/")
+        resp.delete_cookie("access-token-unsecure", path="/")
+        return resp
     return await call_next(request)
 
 if __name__ == "__main__":
