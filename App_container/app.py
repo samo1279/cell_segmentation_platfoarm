@@ -990,6 +990,7 @@ app = gr.mount_gradio_app(
         "<a href='/register' style='color:#f97316;font-weight:600;text-decoration:underline'>"
         "Create an account</a>"
     ),
+    max_file_size="50mb",
 )
 
 
