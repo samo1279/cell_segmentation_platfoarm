@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign In — Cell Segmentation Platform</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:system-ui,-apple-system,sans-serif;
+      min-height:100vh;
+      background:linear-gradient(135deg,#0f172a 0%,#1e293b 60%,#0f172a 100%);
+      display:flex;align-items:center;justify-content:center;
+      padding:20px;
+    }
+    .card{
+      background:#fff;border-radius:16px;padding:40px;
+      width:100%;max-width:400px;
+      box-shadow:0 24px 60px rgba(0,0,0,.35);
+    }
+    h1{font-size:1.5em;margin-bottom:8px;color:#0f172a}
+    .subtitle{font-size:.9em;color:#64748b;margin-bottom:28px}
+    label{display:block;margin-top:16px;font-size:.82em;font-weight:600;color:#374151;text-transform:uppercase}
+    input{
+      width:100%;padding:10px 12px;margin-top:5px;
+      border:1.5px solid #e2e8f0;border-radius:8px;
+      font-size:.97em;outline:none;
+    }
+    input:focus{border-color:#f97316;box-shadow:0 0 0 3px rgba(249,115,22,.12)}
+    .btn{
+      margin-top:22px;width:100%;padding:11px;
+      background:#f97316;color:#fff;border:none;border-radius:8px;
+      font-size:1em;font-weight:600;cursor:pointer;
+    }
+    .btn:hover{background:#ea6c08}
+    .links{margin-top:20px;text-align:center;font-size:.9em;color:#64748b}
+    a{color:#f97316;text-decoration:none}
+    .err{margin-top:14px;padding:10px;background:#fee2e2;color:#991b1b;border-radius:8px;font-size:.9em;display:none}
+    .err.show{display:block}
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Sign In</h1>
+  <p class="subtitle">Welcome back to Cell Segmentation Platform</p>
+  <form id="frm">
+    <label>Username</label>
+    <input type="text" name="username" id="username" required autofocus autocomplete="username">
+    <label>Password</label>
+    <input type="password" name="password" id="password" required autocomplete="current-password">
+    <button class="btn" type="submit" id="btn">Sign In</button>
+  </form>
+  <div class="err" id="err"></div>
+  <div class="links">
+    No account? <a href="/register">Create one free</a>
+  </div>
+</div>
+<script>
+const params = new URLSearchParams(window.location.search);
+if (params.get('error')) {
+  const el = document.getElementById('err');
+  el.textContent = 'Incorrect username or password. Please try again.';
+  el.classList.add('show');
+}
+
+document.getElementById('frm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const btn = document.getElementById('btn');
+  const errEl = document.getElementById('err');
+  errEl.classList.remove('show');
+  btn.disabled = true;
+  btn.textContent = 'Signing in\u2026';
+
+  const body = new URLSearchParams();
+  body.set('username', document.getElementById('username').value);
+  body.set('password', document.getElementById('password').value);
+
+  try {
+    const res = await fetch('/app/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: body.toString(),
+      credentials: 'include',
+    });
+    const data = await res.json();
+    if (data.success) {
+      window.location.href = '/app/';
+    } else {
+      errEl.textContent = 'Incorrect username or password. Please try again.';
+      errEl.classList.add('show');
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  } catch (err) {
+    errEl.textContent = 'Connection error. Please try again.';
+    errEl.classList.add('show');
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+});
+</script>
+</body>
+</html>

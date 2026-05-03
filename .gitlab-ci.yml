@@ -108,6 +108,7 @@ deploy:
       --set-string model.image.repository=${PULL_REGISTRY}/${APP_NAME}-model
       --set-string model.image.tag=${MODEL_TAG}
       --set-string ingress.host=${APP_DOMAIN}
+      --set-string db.password=${DB_PASSWORD}
       >/tmp/rendered.yaml
     # If a previous deploy was interrupted, Helm leaves a "pending" lock that
     # blocks all future upgrades.  Roll back to the last good release to clear
@@ -119,6 +120,7 @@ deploy:
       --set-string model.image.repository=${PULL_REGISTRY}/${APP_NAME}-model
       --set-string model.image.tag=${MODEL_TAG}
       --set-string ingress.host=${APP_DOMAIN}
+      --set-string db.password=${DB_PASSWORD}
       --namespace ${APP_NAME}
       --create-namespace
       --wait

@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import pathlib
 import tempfile
 import time
 import zipfile
@@ -671,297 +672,19 @@ demo.queue()
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Landing page — served at "/" for all visitors (logged in or not).
-# Standard web app pattern: info + CTA buttons to Sign In or Register.
+# HTML page templates — loaded from templates/ at startup.
+# Keeping HTML in separate files prevents large inline strings from
+# obscuring the Python application logic.
 # ---------------------------------------------------------------------------
 
-_LANDING_HTML = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cell Segmentation Platform</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:system-ui,-apple-system,sans-serif;color:#0f172a}
-    header{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);color:#fff;padding:60px 20px;text-align:center}
-    h1{font-size:2.5em;margin-bottom:10px;font-weight:700}
-    .tagline{font-size:1.1em;color:#cbd5e1;margin-bottom:30px}
-    .cta{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
-    .btn{padding:12px 32px;font-size:1em;border:none;border-radius:8px;cursor:pointer;font-weight:600;transition:all .2s;text-decoration:none;display:inline-block}
-    .btn-primary{background:#f97316;color:#fff}
-    .btn-primary:hover{background:#ea6c08;transform:scale(1.05)}
-    .btn-secondary{background:#fff;color:#f97316;border:2px solid #f97316}
-    .btn-secondary:hover{background:#f97316;color:#fff}
-    .features{max-width:1200px;margin:60px auto;padding:0 20px}
-    .features h2{text-align:center;margin-bottom:40px;font-size:2em}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:30px}
-    .card{background:#f8fafc;border-radius:12px;padding:30px;border-left:4px solid #f97316}
-    .card h3{font-size:1.2em;margin-bottom:10px;color:#f97316}
-    .card p{color:#64748b;line-height:1.6}
-    footer{background:#f1f5f9;padding:40px 20px;text-align:center;color:#64748b;margin-top:60px}
-  </style>
-</head>
-<body>
-<header>
-  <h1>Cell Segmentation Platform</h1>
-  <p class="tagline">AI-powered cell analysis with Cellpose — fast, accurate, open source</p>
-  <div class="cta">
-    <a href="/sign-in" class="btn btn-primary">Sign In</a>
-    <a href="/register" class="btn btn-secondary">Create Account</a>
-  </div>
-</header>
+_TEMPLATES_DIR = pathlib.Path(__file__).parent / "templates"
 
-<div class="features">
-  <h2>Why use Cell Segmentation?</h2>
-  <div class="grid">
-    <div class="card">
-      <h3>🎯 Accurate</h3>
-      <p>Advanced Cellpose model trained on thousands of microscopy images for precise cell boundary detection.</p>
-    </div>
-    <div class="card">
-      <h3>⚡ Fast</h3>
-      <p>GPU-accelerated segmentation processes images in seconds, not hours. Scale your analysis instantly.</p>
-    </div>
-    <div class="card">
-      <h3>📊 Complete</h3>
-      <p>Segment, analyze, and track cell morphology. Export results for downstream analysis and publication.</p>
-    </div>
-  </div>
-</div>
+def _load_template(name: str) -> str:
+    return (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
 
-<footer>
-  <p>&copy; 2026 Cell Segmentation Platform. Built with Cellpose and powered by machine learning.</p>
-</footer>
-</body>
-</html>
-"""
-
-# Sign In form
-_SIGNIN_HTML = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign In — Cell Segmentation Platform</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{
-      font-family:system-ui,-apple-system,sans-serif;
-      min-height:100vh;
-      background:linear-gradient(135deg,#0f172a 0%,#1e293b 60%,#0f172a 100%);
-      display:flex;align-items:center;justify-content:center;
-      padding:20px;
-    }
-    .card{
-      background:#fff;border-radius:16px;padding:40px;
-      width:100%;max-width:400px;
-      box-shadow:0 24px 60px rgba(0,0,0,.35);
-    }
-    h1{font-size:1.5em;margin-bottom:8px;color:#0f172a}
-    .subtitle{font-size:.9em;color:#64748b;margin-bottom:28px}
-    label{display:block;margin-top:16px;font-size:.82em;font-weight:600;color:#374151;text-transform:uppercase}
-    input{
-      width:100%;padding:10px 12px;margin-top:5px;
-      border:1.5px solid #e2e8f0;border-radius:8px;
-      font-size:.97em;outline:none;
-    }
-    input:focus{border-color:#f97316;box-shadow:0 0 0 3px rgba(249,115,22,.12)}
-    .btn{
-      margin-top:22px;width:100%;padding:11px;
-      background:#f97316;color:#fff;border:none;border-radius:8px;
-      font-size:1em;font-weight:600;cursor:pointer;
-    }
-    .btn:hover{background:#ea6c08}
-    .links{margin-top:20px;text-align:center;font-size:.9em;color:#64748b}
-    a{color:#f97316;text-decoration:none}
-    .err{margin-top:14px;padding:10px;background:#fee2e2;color:#991b1b;border-radius:8px;font-size:.9em;display:none}
-    .err.show{display:block}
-  </style>
-</head>
-<body>
-<div class="card">
-  <h1>Sign In</h1>
-  <p class="subtitle">Welcome back to Cell Segmentation Platform</p>
-  <form id="frm">
-    <label>Username</label>
-    <input type="text" name="username" id="username" required autofocus>
-    <label>Password</label>
-    <input type="password" name="password" id="password" required>
-    <button class="btn" type="submit" id="btn">Sign In</button>
-  </form>
-  <div class="err" id="err"></div>
-  <div class="links">
-    No account? <a href="/register">Create one free</a>
-  </div>
-</div>
-<script>
-const params = new URLSearchParams(window.location.search);
-if (params.get('error')) {
-  const el = document.getElementById('err');
-  el.textContent = 'Incorrect username or password. Please try again.';
-  el.classList.add('show');
-}
-
-document.getElementById('frm').addEventListener('submit', async function(e) {
-  e.preventDefault();
-  const btn = document.getElementById('btn');
-  const errEl = document.getElementById('err');
-  errEl.classList.remove('show');
-  btn.disabled = true;
-  btn.textContent = 'Signing in…';
-
-  const body = new URLSearchParams();
-  body.set('username', document.getElementById('username').value);
-  body.set('password', document.getElementById('password').value);
-
-  try {
-    const res = await fetch('/app/login', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: body.toString(),
-      credentials: 'include',
-    });
-    const data = await res.json();
-    if (data.success) {
-      window.location.href = '/app/';
-    } else {
-      errEl.textContent = 'Incorrect username or password. Please try again.';
-      errEl.classList.add('show');
-      btn.disabled = false;
-      btn.textContent = 'Sign In';
-    }
-  } catch (err) {
-    errEl.textContent = 'Connection error. Please try again.';
-    errEl.classList.add('show');
-    btn.disabled = false;
-    btn.textContent = 'Sign In';
-  }
-});
-</script>
-</body>
-</html>
-"""
-
-# Registration form
-_REGISTER_HTML = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Create Account — Cell Segmentation Platform</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{
-      font-family:system-ui,-apple-system,sans-serif;
-      min-height:100vh;
-      background:linear-gradient(135deg,#0f172a 0%,#1e293b 60%,#0f172a 100%);
-      display:flex;align-items:center;justify-content:center;
-      padding:20px;
-    }
-    .card{
-      background:#fff;border-radius:16px;padding:40px;
-      width:100%;max-width:400px;
-      box-shadow:0 24px 60px rgba(0,0,0,.35);
-    }
-    h1{font-size:1.5em;margin-bottom:8px;color:#0f172a}
-    .subtitle{font-size:.9em;color:#64748b;margin-bottom:28px}
-    label{display:block;margin-top:16px;font-size:.82em;font-weight:600;color:#374151;text-transform:uppercase}
-    input{
-      width:100%;padding:10px 12px;margin-top:5px;
-      border:1.5px solid #e2e8f0;border-radius:8px;
-      font-size:.97em;outline:none;
-    }
-    input:focus{border-color:#f97316;box-shadow:0 0 0 3px rgba(249,115,22,.12)}
-    .btn{
-      margin-top:22px;width:100%;padding:11px;
-      background:#f97316;color:#fff;border:none;border-radius:8px;
-      font-size:1em;font-weight:600;cursor:pointer;
-    }
-    .btn:hover{background:#ea6c08}
-    .btn:disabled{background:#fdba74;cursor:not-allowed}
-    .links{margin-top:20px;text-align:center;font-size:.9em;color:#64748b}
-    a{color:#f97316;text-decoration:none}
-    .msg{margin-top:14px;padding:10px;border-radius:8px;font-size:.9em;display:none}
-    .msg.ok{background:#d1fae5;color:#065f46;display:block}
-    .msg.err{background:#fee2e2;color:#991b1b;display:block}
-    .spinner{display:inline-block;width:14px;height:14px;border:2px solid #0f172a;
-      border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
-    @keyframes spin{to{transform:rotate(360deg)}}
-  </style>
-</head>
-<body>
-<div class="card">
-  <h1>Create Account</h1>
-  <p class="subtitle">Join Cell Segmentation Platform today</p>
-  <form id="frm">
-    <label>Username</label>
-    <input type="text" id="user" placeholder="3–50 chars — letters, digits, underscore" required autofocus>
-    <label>Password</label>
-    <input type="password" id="pass" placeholder="Minimum 8 characters" required>
-    <label>Confirm Password</label>
-    <input type="password" id="conf" required>
-    <button class="btn" type="submit" id="btn">Create Account</button>
-  </form>
-  <div class="msg" id="msg"></div>
-  <div class="links">
-    Already have an account? <a href="/sign-in">Sign in</a>
-  </div>
-</div>
-<script>
-document.getElementById('frm').addEventListener('submit', async function(e) {
-  e.preventDefault();
-  const user = document.getElementById('user').value.trim();
-  const pass = document.getElementById('pass').value;
-  const conf = document.getElementById('conf').value;
-  const msg = document.getElementById('msg');
-  const btn = document.getElementById('btn');
-
-  msg.className = 'msg'; msg.textContent = '';
-
-  if (pass !== conf) {
-    msg.className = 'msg err';
-    msg.textContent = 'Passwords do not match.';
-    return;
-  }
-
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Creating account…';
-
-  try {
-    const r = await fetch('/auth/register', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({username: user, password: pass})
-    });
-    const d = await r.json();
-    if (r.ok) {
-      msg.className = 'msg ok';
-      msg.textContent = 'Account created! Redirecting to sign in…';
-      this.reset();
-      setTimeout(() => {
-        window.location.href = '/sign-in?ready=' + encodeURIComponent(user);
-      }, 2000);
-    } else {
-      msg.className = 'msg err';
-      msg.textContent = d.detail || 'Registration failed.';
-      btn.disabled = false;
-      btn.textContent = 'Create Account';
-    }
-  } catch(_) {
-    msg.className = 'msg err';
-    msg.textContent = 'Network error — please try again.';
-    btn.disabled = false;
-    btn.textContent = 'Create Account';
-  }
-});
-</script>
-</body>
-</html>
-"""
+_LANDING_HTML = _load_template("landing.html")
+_SIGNIN_HTML  = _load_template("signin.html")
+_REGISTER_HTML = _load_template("register.html")
 
 # ---------------------------------------------------------------------------
 # FastAPI host application — define auth routes BEFORE Gradio mount.
@@ -1035,7 +758,7 @@ app = gr.mount_gradio_app(
 # wrapper (added last = runs first) so it always returns our custom landing
 # page for the root path before Gradio's middleware ever sees the request.
 @app.middleware("http")
-async def _root_landing_middleware(request, call_next):
+async def _security_and_routing_middleware(request, call_next):
     path = request.url.path
     if path in ("/", ""):
         return HTMLResponse(_LANDING_HTML)
@@ -1047,7 +770,14 @@ async def _root_landing_middleware(request, call_next):
         resp.delete_cookie("access-token", path="/")
         resp.delete_cookie("access-token-unsecure", path="/")
         return resp
-    return await call_next(request)
+    response = await call_next(request)
+    # Security headers — applied to every response.
+    # Ref: https://owasp.org/www-project-secure-headers/
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-XSS-Protection"] = "0"  # disabled in favour of CSP
+    return response
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)

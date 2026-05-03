@@ -259,6 +259,10 @@ def auth_login(req: _AuthLoginRequest):
     conn = _get_db_conn()
 
     if conn is None:
+        logger.warning(
+            "DB unavailable — using plaintext credential fallback for login. "
+            "Set DATABASE_URL to enable proper bcrypt-hashed authentication."
+        )
         fallback_valid = bool(
             ADMIN_PASSWORD
             and req.username == ADMIN_USER
@@ -370,7 +374,8 @@ async def segment(
     try:
         img = iio.imread(io.BytesIO(data))
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Could not decode image: {str(e)}")
+        logger.warning("Image decode failed (filename=%s): %s", os.path.basename(image.filename or ""), e)
+        raise HTTPException(status_code=422, detail="Invalid image format or corrupted file.")
 
     if img.ndim >= 2:
         h, w = img.shape[:2]
@@ -380,7 +385,7 @@ async def segment(
                 detail=f"Image resolution {w}x{h} exceeds maximum {MAX_DIMENSION}x{MAX_DIMENSION}.",
             )
 
-    logger.info(f"Processing image: {image.filename}, shape={img.shape}")
+    logger.info("Processing image: %s, shape=%s", os.path.basename(image.filename or ""), img.shape)
     logger.info(f"Using model: {model_type}")
     selected_model = await _ensure_model_loaded(model_type)
 

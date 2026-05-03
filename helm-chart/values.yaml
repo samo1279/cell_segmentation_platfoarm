@@ -53,7 +53,7 @@ db:
   port: 5432
   name: cellseg
   user: cellseg
-  password: cellseg
+  password: ""  # set via --set db.password=... in CI or helm upgrade
   # nodeSelector: {}  # leave empty to schedule on any node
   nodeSelector: {}
 

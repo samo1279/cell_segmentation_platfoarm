@@ -102,7 +102,12 @@ spec:
             - name: USE_GPU
               value: {{ .Values.model.useGpu | quote }}
             - name: DATABASE_URL
-              value: "postgresql://{{ .Values.db.user }}:{{ .Values.db.password }}@{{ .Release.Name }}-db:{{ .Values.db.port }}/{{ .Values.db.name }}"
+              value: "postgresql://{{ .Values.db.user }}:$(DB_PASSWORD)@{{ .Release.Name }}-db:{{ .Values.db.port }}/{{ .Values.db.name }}"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: db-password
           resources:
             requests:
               cpu: {{ .Values.model.resources.requests.cpu }}
