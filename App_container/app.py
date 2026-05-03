@@ -755,7 +755,6 @@ app = gr.mount_gradio_app(
         "Create an account</a>"
     ),
     max_file_size="50mb",
-    allowed_paths=[_GRADIO_TMP],
 )
 
 
