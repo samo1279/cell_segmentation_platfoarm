@@ -38,11 +38,6 @@ _pending_batch_cleanup: list[str] = []
 
 _MODEL_TIMEOUT = httpx.Timeout(connect=10.0, write=60.0, read=900.0, pool=10.0)
 
-# Gradio 5 only serves files from its own cache dir (GRADIO_TEMP_DIR).
-# Writing our output files there avoids having to whitelist extra paths.
-_GRADIO_TMP = os.environ.get("GRADIO_TEMP_DIR") or os.path.join(tempfile.gettempdir(), "gradio")
-os.makedirs(_GRADIO_TMP, exist_ok=True)
-
 # ---------------------------------------------------------------------------
 # DB-backed Gradio auth callable
 # ---------------------------------------------------------------------------
@@ -203,12 +198,12 @@ def segment(image, diameter, flow_threshold, cellprob_threshold, model_type, opa
 
     # --- Downloadable files ---
     # Use delete=False so the file persists while Gradio serves it to the browser.
-    overlay_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir=_GRADIO_TMP)
+    overlay_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     overlay_path = overlay_tmp.name
     overlay_tmp.close()
     Image.fromarray(overlay_uint8).save(overlay_path)
 
-    masks_tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False, dir=_GRADIO_TMP)
+    masks_tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
     masks_path = masks_tmp.name
     masks_tmp.close()
     np.save(masks_path, masks)
@@ -272,7 +267,7 @@ def _render_zstack_slice(masks: np.ndarray, tiff_path: str, z_idx: int, model_na
     overlay_uint8 = _render_overlay(frame_uint8, slice_masks, opacity)
     cell_count = int(len(np.unique(slice_masks)) - 1)
 
-    ov_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir=_GRADIO_TMP)
+    ov_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     Image.fromarray(overlay_uint8).save(ov_tmp.name)
     ov_tmp.close()
 
@@ -315,7 +310,7 @@ def segment_3d(tiff_file, diameter, flow_threshold, cellprob_threshold, model_ty
     n_slices = masks.shape[0] if masks.ndim == 3 else 1
 
     # Save full 3D masks for download
-    masks_tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False, dir=_GRADIO_TMP)
+    masks_tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
     np.save(masks_tmp.name, masks)
     masks_tmp.close()
 
@@ -341,7 +336,7 @@ def export_csv(stats_df):
     if stats_df is None or len(stats_df) == 0:
         raise gr.Error("No statistics to export — run segmentation first.")
     tmp = tempfile.NamedTemporaryFile(
-        suffix=".csv", delete=False, mode="w", newline="", dir=_GRADIO_TMP
+        suffix=".csv", delete=False, mode="w", newline=""
     )
     tmp.close()
     # gr.Dataframe passes a pandas DataFrame when used as input
@@ -446,12 +441,12 @@ def batch_segment(
 
         overlay_uint8 = _render_overlay(image_np, masks, opacity)
 
-        ov_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir=_GRADIO_TMP)
+        ov_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         ov_path = ov_tmp.name
         ov_tmp.close()
         Image.fromarray(overlay_uint8).save(ov_path)
 
-        msk_tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False, dir=_GRADIO_TMP)
+        msk_tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
         msk_path = msk_tmp.name
         msk_tmp.close()
         np.save(msk_path, masks)
@@ -464,7 +459,7 @@ def batch_segment(
 
     progress(1.0, desc="Building ZIP…")
 
-    zip_tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False, dir=_GRADIO_TMP)
+    zip_tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     zip_path = zip_tmp.name
     zip_tmp.close()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -748,6 +743,7 @@ app = gr.mount_gradio_app(
     app,
     demo,
     path="/app",
+    root_path="/app",
     auth=_auth_fn,
     auth_message=(
         "New user? "
@@ -755,6 +751,7 @@ app = gr.mount_gradio_app(
         "Create an account</a>"
     ),
     max_file_size="50mb",
+    allowed_paths=[tempfile.gettempdir()],
 )
 
 
