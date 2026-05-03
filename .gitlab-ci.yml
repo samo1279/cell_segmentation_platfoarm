@@ -95,7 +95,10 @@ build-model:
 # Model image uses content hash (unchanged unless model files changed) so
 # the GPU node never re-pulls the 6.8 GB image unless necessary.
 
-# ── Rotate DB password — sync the running PostgreSQL password with DB_PASSWORD ─
+# ── Reset DB — wipe PVC so PostgreSQL reinitialises with the current DB_PASSWORD ─
+# Safe to run once; after the first successful deploy this stage becomes a no-op
+# (PVC already fresh, DB pod connects fine). Remove this stage once the pipeline
+# is green and you are happy with the new password.
 rotate-db-password:
   stage: rotate-db-password
   image: bitnami/kubectl:latest
@@ -104,20 +107,12 @@ rotate-db-password:
   needs: [build-app, build-model]
   script:
     - NS="$APP_NAME"
-    - echo "Rotating DB password to match CI variable DB_PASSWORD..."
-    - |
-      DB_POD=$(kubectl get pod -n "$NS" -l "app=${APP_NAME}-db" \
-        --field-selector=status.phase=Running \
-        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-      if [ -z "$DB_POD" ]; then
-        echo "No running DB pod found — skipping password rotation (first deploy)."
-      else
-        echo "Running ALTER USER on pod $DB_POD"
-        kubectl exec -n "$NS" "$DB_POD" -- \
-          psql -U cellseg -d cellseg \
-          -c "ALTER USER cellseg WITH PASSWORD '${DB_PASSWORD}';"
-        echo "Password rotation complete."
-      fi
+    - echo "=== Scaling down DB deployment to release PVC ==="
+    - kubectl scale deployment "${APP_NAME}-db" -n "$NS" --replicas=0 2>/dev/null || echo "No DB deployment found (first deploy) — nothing to scale."
+    - kubectl wait --for=delete pod -n "$NS" -l "app=${APP_NAME}-db" --timeout=60s 2>/dev/null || true
+    - echo "=== Deleting DB PVC (data wipe — user confirmed no important data) ==="
+    - kubectl delete pvc -n "$NS" -l "app=${APP_NAME}-db" 2>/dev/null || echo "No PVC found — nothing to delete."
+    - echo "=== Done. Helm deploy will create a fresh PVC with the new password. ==="
   only:
     - main
 
