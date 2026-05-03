@@ -31,29 +31,31 @@ spec:
           resources:
             {{- toYaml .Values.app.resources | nindent 12 }}
           # startupProbe prevents liveness from firing while Gradio loads (can take 30-60s).
-          # 20 attempts × 5s = 100s max startup window.
+          # 30 attempts × 10s = 310s (≈5 min) max startup window.
+          # Gradio 6.x with numpy/matplotlib can take 60-90s on a loaded CPU node;
+          # the wider window prevents premature CrashLoopBackOff.
           startupProbe:
             httpGet:
               path: /healthz
               port: {{ .Values.app.port }}
             initialDelaySeconds: 10
-            periodSeconds: 5
-            failureThreshold: 40
-            timeoutSeconds: 3
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
               port: {{ .Values.app.port }}
             periodSeconds: 15
             failureThreshold: 3
-            timeoutSeconds: 3
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /healthz
               port: {{ .Values.app.port }}
             periodSeconds: 10
             failureThreshold: 3
-            timeoutSeconds: 3
+            timeoutSeconds: 5
 ---
 # --- Model Container Deployment (FastAPI + Cellpose) ---
 apiVersion: apps/v1

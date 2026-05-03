@@ -111,10 +111,18 @@ deploy:
       --set-string ingress.host=${APP_DOMAIN}
       --set-string db.password=${DB_PASSWORD}
       >/tmp/rendered.yaml
-    # If a previous deploy was interrupted, Helm leaves a "pending" lock that
-    # blocks all future upgrades.  Roll back to the last good release to clear
-    # it.  If no previous release exists the rollback fails silently (|| true).
-    - helm rollback ${APP_NAME} --namespace ${APP_NAME} 2>/dev/null || true
+    # Only roll back if the current release is stuck in a "pending" state.
+    # Rolling back unconditionally causes unnecessary pod restarts and doubles
+    # API calls, which saturates the client-go rate limiter → context deadline.
+    - |
+      HELM_STATUS=$(helm status ${APP_NAME} --namespace ${APP_NAME} -o json 2>/dev/null \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('info',{}).get('status',''))" \
+        2>/dev/null || echo "")
+      echo "Helm release status before upgrade: ${HELM_STATUS:-not-deployed}"
+      if [ -n "$HELM_STATUS" ] && echo "$HELM_STATUS" | grep -q "pending"; then
+        echo "Pending release detected — rolling back to clear lock..."
+        helm rollback ${APP_NAME} --namespace ${APP_NAME} 2>/dev/null || true
+      fi
     - helm upgrade --install ${APP_NAME} ./helm-chart
       --set-string app.image.repository=${PULL_REGISTRY}/${APP_NAME}-app
       --set-string app.image.tag=${IMAGE_TAG}
@@ -126,6 +134,7 @@ deploy:
       --create-namespace
       --wait
       --timeout 12m0s
+      --cleanup-on-fail
   only:
     - main
 
@@ -156,6 +165,9 @@ verify:
     - echo "===== 2. FULL MODEL POD DESCRIBE (includes OOMKill, probe failures) ====="
     - kubectl describe pod -n "$NS" -l "app=${APP_NAME}-model" || true
 
+    - echo "===== 2b. FULL APP POD DESCRIBE (OOMKill, CrashLoop, probe failures) ====="
+    - kubectl describe pod -n "$NS" -l "app=${APP_NAME}-app" || true
+
     - echo "===== 3. MODEL LOGS — current ====="
     - kubectl logs -n "$NS" -l "app=${APP_NAME}-model" --tail=100 || true
 
@@ -164,6 +176,9 @@ verify:
 
     - echo "===== 5. APP LOGS — current ====="
     - kubectl logs -n "$NS" -l "app=${APP_NAME}-app" --tail=50 || true
+
+    - echo "===== 5b. APP LOGS — previous container (crash / OOMKill logs) ====="
+    - kubectl logs -n "$NS" -l "app=${APP_NAME}-app" --previous --tail=100 || echo "no previous app container"
 
     - echo "===== 6. SERVICES AND ENDPOINTS ====="
     - kubectl get svc -n "$NS" || true
@@ -194,7 +209,14 @@ verify:
       if [ -z "$APP_POD" ]; then
         echo "No app pod found; skipping health and segment smoke tests."
       else
-        kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,sys; r=httpx.get("http://cellpose-poc-model:8000/health",timeout=15); print("health:",r.status_code,r.text); sys.exit(0 if r.status_code==200 else 1)' || true
+        CONTAINER_READY=$(kubectl get pod -n "$NS" "$APP_POD" \
+          -o jsonpath='{.status.containerStatuses[?(@.name=="gradio")].ready}' 2>/dev/null || echo "false")
+        echo "App container ready=$CONTAINER_READY"
+        if [ "$CONTAINER_READY" != "true" ]; then
+          echo "App container 'gradio' is not ready — skipping exec health check."
+        else
+          kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,sys; r=httpx.get("http://cellpose-poc-model:8000/health",timeout=15); print("health:",r.status_code,r.text); sys.exit(0 if r.status_code==200 else 1)' || true
+        fi
       fi
 
     - echo "===== 11. SEGMENT TEST ====="
@@ -203,7 +225,13 @@ verify:
       if [ -z "$APP_POD" ]; then
         echo "No app pod found; skipping segment smoke test."
       else
-        kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,numpy as np,io; from PIL import Image; img=np.zeros((64,64,3),dtype=np.uint8); buf=io.BytesIO(); Image.fromarray(img).save(buf,format="PNG"); buf.seek(0); r=httpx.post("http://cellpose-poc-model:8000/segment",files={"image":("t.png",buf.getvalue(),"image/png")},data={"flow_threshold":"0.4","cellprob_threshold":"0.0"},timeout=600); print("segment:",r.status_code,"masks shape:",np.load(io.BytesIO(r.content)).shape if r.status_code==200 else r.text[:200])' || true
+        CONTAINER_READY=$(kubectl get pod -n "$NS" "$APP_POD" \
+          -o jsonpath='{.status.containerStatuses[?(@.name=="gradio")].ready}' 2>/dev/null || echo "false")
+        if [ "$CONTAINER_READY" != "true" ]; then
+          echo "App container 'gradio' is not ready — skipping exec segment test."
+        else
+          kubectl exec -n "$NS" "$APP_POD" -- python3 -c 'import httpx,numpy as np,io; from PIL import Image; img=np.zeros((64,64,3),dtype=np.uint8); buf=io.BytesIO(); Image.fromarray(img).save(buf,format="PNG"); buf.seek(0); r=httpx.post("http://cellpose-poc-model:8000/segment",files={"image":("t.png",buf.getvalue(),"image/png")},data={"flow_threshold":"0.4","cellprob_threshold":"0.0"},timeout=600); print("segment:",r.status_code,"masks shape:",np.load(io.BytesIO(r.content)).shape if r.status_code==200 else r.text[:200])' || true
+        fi
       fi
   only:
     - main
