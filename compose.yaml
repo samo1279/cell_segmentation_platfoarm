@@ -26,7 +26,6 @@ services:
       # Leave blank to disable API key auth in local dev.
       # Set to a secret value to require X-API-Key on every /segment call.
       - MODEL_API_KEY=
-      - ADMIN_USER=admin
     depends_on:
       model:
         condition: service_healthy
@@ -52,8 +51,6 @@ services:
       - DATABASE_URL=postgresql://cellseg:${POSTGRES_PASSWORD:-cellseg}@db:5432/cellseg
       # Leave blank to disable API key auth.
       - API_KEY=
-      - ADMIN_USER=admin
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     depends_on:
       db:
         condition: service_healthy

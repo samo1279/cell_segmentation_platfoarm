@@ -28,7 +28,6 @@ MODEL_REGISTER_URL = f"{_MODEL_BASE}/auth/register"
 MODEL_LOGIN_URL = f"{_MODEL_BASE}/auth/login"
 
 MODEL_API_KEY: str | None = os.getenv("MODEL_API_KEY") or None
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 
 
 # Tracks temp files from the previous call so they can be deleted at the start
@@ -356,7 +355,7 @@ def load_history(request: gr.Request = None):
     try:
         headers = {"X-API-Key": MODEL_API_KEY} if MODEL_API_KEY else {}
         username = getattr(request, "username", None) if request else None
-        params = {} if not username or username == ADMIN_USER else {"user": username}
+        params = {"user": username} if username else {}
         resp = httpx.get(
             MODEL_PROJECTS_URL,
             headers=headers,

@@ -23,8 +23,6 @@ load_dotenv()
 USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
 DATABASE_URL = os.environ.get("DATABASE_URL")
 API_KEY: str | None = os.environ.get("API_KEY") or None
-ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 DEFAULT_MODEL_TYPE = os.environ.get("DEFAULT_MODEL_TYPE", "cyto3")
 
 # ---------------------------------------------------------------------------
@@ -144,7 +142,6 @@ async def lifespan(app: FastAPI):
                         id            SERIAL PRIMARY KEY,
                         username      TEXT UNIQUE NOT NULL,
                         password_hash TEXT NOT NULL,
-                        is_admin      BOOLEAN DEFAULT FALSE,
                         created_at    TIMESTAMPTZ DEFAULT NOW()
                     )
                     """
@@ -165,23 +162,8 @@ async def lifespan(app: FastAPI):
                 )
                 # Migrations for pre-existing tables
                 cur.execute(
-                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE"
-                )
-                cur.execute(
                     "ALTER TABLE projects ADD COLUMN IF NOT EXISTS username TEXT"
                 )
-
-                if ADMIN_PASSWORD:
-                    pw_hash = bcrypt.hashpw(ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
-                    cur.execute(
-                        """
-                        INSERT INTO users (username, password_hash, is_admin)
-                        VALUES (%s, %s, TRUE)
-                        ON CONFLICT (username) DO NOTHING
-                        """,
-                        (ADMIN_USER, pw_hash),
-                    )
-                    logger.info("Admin account ensured for user '%s'", ADMIN_USER)
             logger.info("DB tables ready")
 
         except Exception as exc:
@@ -259,16 +241,7 @@ def auth_login(req: _AuthLoginRequest):
     conn = _get_db_conn()
 
     if conn is None:
-        logger.warning(
-            "DB unavailable — using plaintext credential fallback for login. "
-            "Set DATABASE_URL to enable proper bcrypt-hashed authentication."
-        )
-        fallback_valid = bool(
-            ADMIN_PASSWORD
-            and req.username == ADMIN_USER
-            and req.password == ADMIN_PASSWORD
-        )
-        return {"valid": fallback_valid}
+        return {"valid": False}
 
     try:
         with conn.cursor() as cur:
@@ -481,7 +454,7 @@ def get_projects(user: str | None = None):
         )
     try:
         with conn.cursor() as cur:
-            if user and user != ADMIN_USER:
+            if user:
                 cur.execute(
                     """
                     SELECT id, project_name, image_filename,

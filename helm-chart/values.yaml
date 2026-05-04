@@ -56,8 +56,3 @@ db:
   password: ""  # set via --set db.password=... in CI or helm upgrade
   # nodeSelector: {}  # leave empty to schedule on any node
   nodeSelector: {}
-
-# --- Admin account (auto-seeded at model startup when ADMIN_PASSWORD is set) ---
-admin:
-  username: admin
-  password: ""
