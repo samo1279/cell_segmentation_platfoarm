@@ -36,6 +36,11 @@
 			"type": "shell",
 			"command": "rm '/Users/sepehrmortazavi/Desktop/Master thesis /POC_version1/document/inspect_docx.py' '/Users/sepehrmortazavi/Desktop/Master thesis /POC_version1/document/read_ch3.py' '/Users/sepehrmortazavi/Desktop/Master thesis /POC_version1/document/generate_chapter3.py'",
 			"isBackground": false
+		},
+		{
+			"label": "Inspect docx styles inline",
+			"type": "shell",
+			"command": "/opt/homebrew/Caskroom/miniconda/base/bin/python3 -c \"from docx import Document; doc = Document('docs/wiki/Base--File.docx'); styles={}; [styles.update({p.style.name: p.text.strip()[:60]}) for p in doc.paragraphs if p.text.strip()]; [print(k, '->', v) for k,v in sorted(styles.items())]; print('---HEADINGS---'); [print(i, p.style.name, p.text.strip()[:80]) for i,p in enumerate(doc.paragraphs) if 'Heading' in p.style.name and p.text.strip()]; print('TOTAL', len(doc.paragraphs))\""
 		}
 	]
 }
