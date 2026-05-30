@@ -22,7 +22,11 @@ RUN if [ "${INSTALL_REQUIREMENTS}" = "true" ]; then \
       rm -rf /var/lib/apt/lists/* && \
       pip install --no-cache-dir -r requirements.txt && \
       if [ "${USE_CUDA}" = "true" ]; then \
-        pip install --no-cache-dir --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121; \
+        pip install --no-cache-dir --force-reinstall \
+          torch==<FILL FROM pip freeze of base image>+cu121 \
+          torchvision==<FILL FROM pip freeze of base image>+cu121 \
+          torchaudio==<FILL FROM pip freeze of base image>+cu121 \
+          --index-url https://download.pytorch.org/whl/cu121; \
       fi; \
     else \
       if ! command -v curl >/dev/null 2>&1; then \

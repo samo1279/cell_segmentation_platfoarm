@@ -9,6 +9,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 - `Model_container/cellpose_api/app.py` — `POST /segment` input validation operator changed from `and` to `or` to enforce stricter validation. Files must now have BOTH a valid extension AND a valid MIME type (previously accepted if either was valid). This matches the thesis Appendix Listing A.2 documentation.
 - `Model_container/tests/test_api.py` — two regression tests added to `TestSegmentValidation`: `test_valid_ext_but_bad_mime_returns_422` and `test_bad_ext_but_valid_mime_returns_422` to lock the stricter OR-based validation behaviour.
+- `App_container/requirements.txt` — all dependencies pinned to exact versions (`==`) to ensure reproducible builds: httpx==0.27.0, numpy==2.4.2, Pillow==11.3.0, matplotlib==3.10.7, pandas==2.3.3, imageio==2.37.0, tifffile==2025.10.16, fastapi==0.136.1, uvicorn==0.46.0.
+- `Model_container/requirements.txt` — all dependencies pinned to exact versions (`==`): fastapi==0.136.1, uvicorn==0.46.0, python-multipart==0.0.27, packaging==25.0, cellpose==4.0.7, numpy==2.4.2, imageio==2.37.0, tifffile==2025.10.16, psycopg2-binary==2.9.12, python-dotenv==1.1.0, bcrypt==5.0.0.
+- `Model_container/Dockerfile` — CUDA torch reinstall line updated with version placeholders (`<FILL FROM pip freeze of base image>+cu121`); must be filled from `docker run --rm --entrypoint pip localhost:32000/cellpose-poc-model-base:stable freeze` when the base image is accessible.
 
 ### Added
 - `App_container/templates/` — three HTML template files extracted from inline Python strings: `landing.html`, `signin.html`, `register.html`. Pages served by FastAPI before the Gradio auth layer.
