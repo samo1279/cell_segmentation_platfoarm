@@ -330,7 +330,7 @@ async def segment(
     # --- Input validation ---
     ext = os.path.splitext(image.filename or "")[1].lower()
     content_type = (image.content_type or "").lower()
-    if ext not in ALLOWED_EXTENSIONS and content_type not in ALLOWED_CONTENT_TYPES:
+    if ext not in ALLOWED_EXTENSIONS or content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=422,
             detail=f"Unsupported file format '{ext}'. Allowed: PNG, TIFF, JPEG.",

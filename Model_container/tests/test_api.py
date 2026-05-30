@@ -193,6 +193,22 @@ class TestSegmentValidation:
         )
         assert r.status_code == 422
 
+    def test_valid_ext_but_bad_mime_returns_422(self, client):
+        # .png extension but text/plain MIME -> rejected only under OR
+        r = client.post(
+            "/segment",
+            files={"image": ("img.png", _make_png(), "text/plain")},
+        )
+        assert r.status_code == 422
+
+    def test_bad_ext_but_valid_mime_returns_422(self, client):
+        # .bin extension but image/png MIME (real PNG bytes) -> rejected only under OR
+        r = client.post(
+            "/segment",
+            files={"image": ("file.bin", _make_png(), "image/png")},
+        )
+        assert r.status_code == 422
+
     def test_oversized_file_returns_422(self, client, monkeypatch):
         monkeypatch.setattr(model_app, "MAX_FILE_SIZE", 10)  # 10 bytes
         r = client.post(

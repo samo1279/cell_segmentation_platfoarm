@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- `Model_container/cellpose_api/app.py` — `POST /segment` input validation operator changed from `and` to `or` to enforce stricter validation. Files must now have BOTH a valid extension AND a valid MIME type (previously accepted if either was valid). This matches the thesis Appendix Listing A.2 documentation.
+- `Model_container/tests/test_api.py` — two regression tests added to `TestSegmentValidation`: `test_valid_ext_but_bad_mime_returns_422` and `test_bad_ext_but_valid_mime_returns_422` to lock the stricter OR-based validation behaviour.
+
 ### Added
 - `App_container/templates/` — three HTML template files extracted from inline Python strings: `landing.html`, `signin.html`, `register.html`. Pages served by FastAPI before the Gradio auth layer.
 - `helm-chart/templates/secrets.yaml` — Kubernetes `Secret` resource for the database password; referenced via `secretKeyRef` in the model container deployment.
