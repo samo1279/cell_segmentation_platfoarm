@@ -162,6 +162,10 @@ metadata:
   name: {{ .Release.Name }}-db
 spec:
   replicas: 1
+  # Recreate is required for ReadWriteOnce PVCs: only one pod can mount the volume
+  # at a time, so RollingUpdate would deadlock waiting for the old pod to release it.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: {{ .Release.Name }}-db
@@ -194,6 +198,13 @@ spec:
               value: {{ .Values.db.user | quote }}
             - name: POSTGRES_PASSWORD
               value: {{ .Values.db.password | quote }}
+            # Store data in a subdirectory to avoid lost+found conflicts on some
+            # volume provisioners that pre-create a lost+found entry at the root.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: db-data
+              mountPath: /var/lib/postgresql/data
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", {{ .Values.db.user | quote }}]
@@ -208,3 +219,7 @@ spec:
             periodSeconds: 30
             failureThreshold: 3
             timeoutSeconds: 5
+      volumes:
+        - name: db-data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-db-pvc

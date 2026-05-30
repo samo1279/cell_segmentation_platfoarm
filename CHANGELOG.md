@@ -10,6 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `App_container/templates/` — three HTML template files extracted from inline Python strings: `landing.html`, `signin.html`, `register.html`. Pages served by FastAPI before the Gradio auth layer.
 - `helm-chart/templates/secrets.yaml` — Kubernetes `Secret` resource for the database password; referenced via `secretKeyRef` in the model container deployment.
 - `document/architecture_guide.md` — comprehensive 13-chapter architecture guide covering: motivation, monolith vs microservices theory, Docker containerisation, Docker Compose local dev, three-service design, API contract, network and security architecture, Kubernetes concepts, Helm, GPU inference, CI/CD pipeline, and trade-offs.
+- `helm-chart/templates/pvc.yaml` — new `PersistentVolumeClaim` template (`{{ .Release.Name }}-db-pvc`) so PostgreSQL data survives pod restarts, rescheduling, and node drains in the Kubernetes production environment. Storage size is configurable via `db.storage` in `values.yaml` (default `5Gi`).
 
 ### Changed
 - `App_container/app.py` — dead `_SIGNIN_HTML_UNUSED` and `_REGISTER_HTML_UNUSED` string blocks (~225 lines) removed; HTML content now loaded from `templates/` via `_load_template()`.
@@ -18,6 +19,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `Model_container/cellpose_api/app.py` — image decode error message changed to generic text to prevent information disclosure (OWASP A02).
 - `Model_container/cellpose_api/app.py` — filename in log messages sanitised with `os.path.basename()` to prevent log injection.
 - `helm-chart/templates/deployment.yaml` — database password now sourced from Kubernetes Secret via `secretKeyRef` instead of being inlined from `values.yaml`.
+- `helm-chart/templates/deployment.yaml` — PostgreSQL Deployment updated: added `strategy: Recreate` (required for ReadWriteOnce PVCs to avoid RollingUpdate deadlock); added `PGDATA=/var/lib/postgresql/data/pgdata` env var (avoids `lost+found` conflicts on some provisioners); added `volumeMounts` and `volumes` referencing the new PVC.
+- `helm-chart/values.yaml` — added `db.storage: 5Gi` field to control the PVC size.
 - `helm-chart/values.yaml` — `db.password` placeholder changed to empty string; must be supplied via `--set db.password=...` at deploy time.
 - `.gitlab-ci.yml` — `--set-string db.password=$DB_PASSWORD` added to both `helm template` and `helm upgrade --install` commands.
 - `README.md` — full rewrite with two clear sections: Local Development (Docker Compose, CPU) and Server Deployment (Kubernetes + Helm + GitLab CI), plus updated API reference and project structure.
