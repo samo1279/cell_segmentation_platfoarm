@@ -1,0 +1,13 @@
+# PersistentVolumeClaim for the PostgreSQL database.
+# Without this, every pod restart erases all user accounts and segmentation history.
+# The storage size is configurable via values.yaml (db.storage).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-db-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.db.storage | default "5Gi" | quote }}

@@ -56,3 +56,6 @@ db:
   password: ""  # set via --set db.password=... in CI or helm upgrade
   # nodeSelector: {}  # leave empty to schedule on any node
   nodeSelector: {}
+  # Size of the PersistentVolumeClaim provisioned for the database pod.
+  # The default StorageClass of the cluster is used unless overridden.
+  storage: 5Gi

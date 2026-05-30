@@ -13,3 +13,25 @@ __pycache__/
 # Media and binary test data — store externally, not in git
 media/
 results_masking/
+
+# Photo / image files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.tif
+*.webp
+*.svg
+*.ico
+
+# AI-generated document folder (thesis chapters, prompts, scripts)
+document/
+
+# AI-generated wiki / docs
+docs/wiki/
+
+# Miscellaneous planning markdown files
+plan.md
+plan_chapter.md
