@@ -1,9 +1,0 @@
-{
-  "servers": {
-    "drawio": {
-      "command": "npx",
-      "args": ["-y", "drawio-mcp-server@latest", "--editor"],
-      "type": "stdio"
-    }
-  }
-}

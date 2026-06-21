@@ -5,6 +5,17 @@
 # Local environment secrets — never commit real credentials
 .env
 
+# IDE / editor configs — local machine only
+.vscode/
+.idea/
+*.code-workspace
+
+# MCP server config (local dev tool)
+.mcp.json
+
+# AI assistant personal configs — never commit
+.claude/
+
 # Python
 __pycache__/
 *.pyc

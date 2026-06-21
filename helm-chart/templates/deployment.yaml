@@ -197,7 +197,10 @@ spec:
             - name: POSTGRES_USER
               value: {{ .Values.db.user | quote }}
             - name: POSTGRES_PASSWORD
-              value: {{ .Values.db.password | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: db-password
             # Store data in a subdirectory to avoid lost+found conflicts on some
             # volume provisioners that pre-create a lost+found entry at the root.
             - name: PGDATA
