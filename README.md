@@ -9,14 +9,15 @@ AI-powered cell segmentation using [Cellpose](https://github.com/MouseLand/cellp
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
-2. [Local Development — Docker Compose](#local-development--docker-compose)
-3. [Server Deployment — Kubernetes + Helm](#server-deployment--kubernetes--helm)
-4. [Authentication](#authentication)
-5. [Usage](#usage)
-6. [Configuration Reference](#configuration-reference)
-7. [API Reference](#api-reference)
-8. [Project Structure](#project-structure)
-9. [Status](#status)
+2. [Screenshots](#screenshots)
+3. [Local Development — Docker Compose](#local-development--docker-compose)
+4. [Server Deployment — Kubernetes + Helm](#server-deployment--kubernetes--helm)
+5. [Authentication](#authentication)
+6. [Usage](#usage)
+7. [Configuration Reference](#configuration-reference)
+8. [API Reference](#api-reference)
+9. [Project Structure](#project-structure)
+10. [Status](#status)
 
 ---
 
@@ -49,6 +50,35 @@ PostgreSQL  (port 5432)
 The Model Container and Database are **never exposed to the host** — internal-only services. All external traffic enters only through the App Container (local) or the Ingress (Kubernetes).
 
 For the full architectural discussion see [document/architecture_guide.md](document/architecture_guide.md) and [document/system_design.md](document/system_design.md).
+
+### System Architecture Diagram
+
+![Architecture](Galley/fig_ch3_architecture.png)
+
+---
+
+## Screenshots
+
+### Landing Page
+![Landing page](Galley/01_landing_page.png)
+
+### Sign In & Register
+<p float="left">
+  <img src="Galley/02_signin_page.png" width="48%" alt="Sign-in page"/>
+  <img src="Galley/09_register_page.png" width="48%" alt="Register page"/>
+</p>
+
+### Main UI — Upload & Segment
+<p float="left">
+  <img src="Galley/06_image_uploaded.png" width="48%" alt="Image uploaded"/>
+  <img src="Galley/07_after_segment_click.png" width="48%" alt="After segment click"/>
+</p>
+
+### Segmentation Result
+![Segmentation result](Galley/07_segmentation_result.png)
+
+### History Tab
+![History tab](Galley/08_history_tab.png)
 
 ---
 
